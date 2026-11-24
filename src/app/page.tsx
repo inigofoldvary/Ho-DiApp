@@ -6,7 +6,7 @@ import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { AppBar, Button, Card, ErrorBox, Loading } from "@/components/ui";
 
-type Household = { id: string; name: string; kind: string; status: string };
+type Household = { id: string; name: string; kind: string; status: string; left?: boolean };
 
 export default function Home() {
   const user = useRequireUser();
@@ -17,12 +17,14 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
     supabase().from("household_members")
-      .select("households(id, name, kind, status)")
-      .eq("user_id", user.id).is("left_at", null)
+      .select("left_at, households(id, name, kind, status)")
+      .eq("user_id", user.id)
       .then(({ data, error }) => {
         if (error) return setLoadError(errorText(error));
-        const list = (data ?? []).map((r: { households: Household | Household[] }) =>
-          Array.isArray(r.households) ? r.households[0] : r.households).filter(Boolean);
+        const list = (data ?? []).map((r: { left_at: string | null; households: Household | Household[] }) => {
+          const h = Array.isArray(r.households) ? r.households[0] : r.households;
+          return h ? ({ ...h, left: !!r.left_at } as Household) : null;
+        }).filter((h): h is Household => !!h);
         if (list.length === 0) router.replace("/hogar/nuevo");
         else setHomes(list.sort((a, b) => a.name.localeCompare(b.name)));
       });
@@ -30,8 +32,8 @@ export default function Home() {
 
   if (loadError) return <main className="pt-10"><ErrorBox>No se pudieron cargar tus hogares: {loadError}</ErrorBox></main>;
   if (!homes) return <Loading />;
-  const active = homes.filter((h) => h.status !== "disuelto");
-  const past = homes.filter((h) => h.status === "disuelto");
+  const active = homes.filter((h) => h.status !== "disuelto" && !h.left);
+  const past = homes.filter((h) => h.status === "disuelto" || h.left);
   return (
     <main>
       <AppBar right={
@@ -49,7 +51,7 @@ export default function Home() {
       {past.length > 0 && (
         <section className="mt-8">
           <h2 className="mb-1 text-base font-semibold">Historial</h2>
-          <p className="mb-3 text-sm text-muted">Hogares disueltos. Puedes consultarlos y volver a descargar su PDF cuando quieras.</p>
+          <p className="mb-3 text-sm text-muted">Hogares disueltos o de los que saliste. Puedes consultarlos y volver a descargar su PDF cuando quieras.</p>
           <div className="space-y-3 opacity-80">
             {past.map((h) => <HomeCard key={h.id} h={h} />)}
           </div>
@@ -60,7 +62,7 @@ export default function Home() {
 }
 
 function HomeCard({ h }: { h: Household }) {
-  const gone = h.status === "disuelto";
+  const gone = h.status === "disuelto" || !!h.left;
   return (
     <Link href={`/hogar/${h.id}`} className="block">
       <Card className="flex items-center gap-4">
@@ -69,7 +71,7 @@ function HomeCard({ h }: { h: Household }) {
           <span className="block truncate font-semibold">{h.name}</span>
           <span className="block text-sm text-muted">
             {h.kind === "pareja" ? "Pareja" : "Compañeros de piso"}
-            {h.status === "disolviendo" ? " · disolviéndose" : gone ? " · disuelto" : ""}
+            {h.left ? " · saliste" : h.status === "disolviendo" ? " · disolviéndose" : h.status === "disuelto" ? " · disuelto" : ""}
           </span>
         </span>
         <span className="text-xl text-muted">›</span>
