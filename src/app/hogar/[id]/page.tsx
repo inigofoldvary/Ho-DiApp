@@ -29,6 +29,7 @@ export default function Hogar() {
   const [loadError, setLoadError] = useState("");
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [pendingPays, setPendingPays] = useState(0);
+  const [planCount, setPlanCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -39,6 +40,8 @@ export default function Hogar() {
     db.from("dissolutions").select("id, leaving_user_id").eq("household_id", id).eq("kind", "parcial").eq("status", "pendiente")
       .limit(1).then(({ data }) => setExit(data?.[0] ?? null));
     loadMembers(id, user.id).then(setMembers).catch(() => {});
+    db.from("recurring_plans").select("id", { count: "exact", head: true }).eq("household_id", id)
+      .then(({ count }) => setPlanCount(count ?? 0));
     db.rpc("sync_installments", { p_household: id }).then(() =>
       db.rpc("my_pending", { p_household: id }).then(({ data }) => {
         const rows = (data ?? []) as { subject_type: string; subject_id: string }[];
@@ -69,7 +72,7 @@ export default function Hogar() {
       <Link href="/" className="mb-3 block text-sm text-muted">‹ Tus hogares</Link>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h1 className="min-w-0 truncate text-2xl font-bold tracking-tight">{home.name}</h1>
-        <Link href={`/hogar/${id}/reporte`} className="shrink-0 rounded-full border border-line bg-card px-3 py-1 text-sm font-medium">📄 Reporte</Link>
+        <Link href={`/hogar/${id}/reporte`} className="shrink-0 rounded-full border border-line bg-card px-3 py-1 text-sm font-medium">Ver reporte</Link>
       </div>
       {home.status !== "activo" && (
         <Link href={`/hogar/${id}/disolver`} className="mb-4 block rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
@@ -104,9 +107,9 @@ export default function Hogar() {
           ? <Link href={`/hogar/${id}/anadir`}><Button className="!bg-logo !text-white">+ Añadir</Button></Link>
           : <Button disabled className="!bg-logo !text-white">+ Añadir</Button>}
       </div>
-      <Link href={`/hogar/${id}/pagos`} className="mb-6 block">
+      <Link href={planCount === 0 && canEdit ? `/hogar/${id}/pagos/nuevo?desde=hogar` : `/hogar/${id}/pagos`} className="mb-6 block">
         <Button variant="secondary" className={pendingPays > 0 ? "!border-warn" : ""}>
-          🔁 Pagos recurrentes{pendingPays > 0 ? ` · ${pendingPays} por confirmar` : ""}
+          Pagos recurrentes{pendingPays > 0 ? ` · ${pendingPays} por confirmar` : ""}
         </Button>
       </Link>
 
@@ -150,10 +153,10 @@ export default function Hogar() {
         </ul>
       )}
       {canEdit && (
-        <div className="mt-10 space-y-3 text-center text-sm text-muted">
+        <div className="mt-10 space-y-3">
           {home.kind !== "pareja" && !exit && (
-            <Link href={`/hogar/${id}/salida`} className="block underline">Alguien se va del piso</Link>)}
-          <Link href={`/hogar/${id}/disolver`} className="block underline">Disolver este hogar</Link>
+            <Link href={`/hogar/${id}/salida`} className="block"><Button variant="secondary">Alguien se va del piso</Button></Link>)}
+          <Link href={`/hogar/${id}/disolver`} className="block"><Button variant="secondary" className="!text-bad">Disolver este hogar</Button></Link>
         </div>
       )}
     </main>

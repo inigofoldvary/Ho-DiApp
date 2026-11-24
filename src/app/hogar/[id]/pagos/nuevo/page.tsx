@@ -23,6 +23,8 @@ export default function NuevoPago() {
   const [concept, setConcept] = useState("");
   const [monthly, setMonthly] = useState("");
   const [start, setStart] = useState(thisMonth());
+  const [fromHome, setFromHome] = useState(false);
+  useEffect(() => { setFromHome(new URLSearchParams(window.location.search).get("desde") === "hogar"); }, []);
   const [endless, setEndless] = useState(false);
   const [count, setCount] = useState("");
   const [assetId, setAssetId] = useState("");
@@ -66,7 +68,7 @@ export default function NuevoPago() {
 
   return (
     <main>
-      <Header title="Nuevo pago recurrente" back={`/hogar/${id}/pagos`} />
+      <Header title="Nuevo pago recurrente" back={fromHome ? `/hogar/${id}` : `/hogar/${id}/pagos`} />
       <form onSubmit={save} className="space-y-5">
         <Field label="Concepto" value={concept} onChange={(e) => setConcept(e.target.value)} required maxLength={120}
           placeholder="Letra del coche, hipoteca…" autoFocus />
