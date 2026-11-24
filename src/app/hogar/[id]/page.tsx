@@ -65,7 +65,7 @@ export default function Hogar() {
 
       <div className="mb-6 grid grid-cols-2 gap-3">
         <Link href={`/hogar/${id}/anadir`}><Button>+ Añadir</Button></Link>
-        <Button variant="secondary" disabled title="Próximamente">Reporte</Button>
+        <Link href={`/hogar/${id}/reporte`}><Button variant="secondary">Reporte</Button></Link>
       </div>
 
       {assets.length === 0 ? (
