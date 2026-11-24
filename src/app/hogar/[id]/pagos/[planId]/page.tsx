@@ -40,6 +40,7 @@ export default function PlanDetail() {
   const [exceptionFor, setExceptionFor] = useState<Inst | null>(null);
   const [excRows, setExcRows] = useState<ShareRow[]>([]);
   const [excNote, setExcNote] = useState("");
+  const [confirmersDb, setConfirmersDb] = useState<Record<string, string[]> | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -53,6 +54,17 @@ export default function PlanDetail() {
     if (p.error) return setError(p.error.code === "PGRST116" ? "Este pago no existe o no tienes acceso." : errorText(p.error));
     const instList = (i.data as unknown as Inst[]) ?? [];
     const ids = [planId, ...instList.map((x) => x.id)];
+    const [k1, k2] = await Promise.all([
+      db.rpc("subject_confirmers", { p_type: "recurring_plan", p_ids: [planId] }),
+      db.rpc("subject_confirmers", { p_type: "installment", p_ids: instList.map((x) => x.id) }),
+    ]);
+    if (!k1.error && !k2.error) {
+      const map: Record<string, string[]> = {};
+      for (const r of [...(k1.data ?? []), ...(k2.data ?? [])] as { subject_id: string; user_id: string }[]) {
+        (map[r.subject_id] ??= []).push(r.user_id);
+      }
+      setConfirmersDb(map);
+    }
     const c = await db.from("confirmations").select("subject_type, subject_id, subject_version, user_id, decision, comment, created_at")
       .in("subject_id", ids).order("created_at");
     setPlan(p.data as unknown as Plan);
@@ -70,7 +82,7 @@ export default function PlanDetail() {
   const nameOf = (u: string) => (u === user.id ? "Tú" : members.find((m) => m.user_id === u)?.name ?? "Antiguo miembro");
   const active = members.filter((m) => m.active).map((m) => m.user_id);
   const shareUsers = plan.recurring_plan_shares.map((s) => s.user_id);
-  const planConfirmers = shareUsers.length === 1 ? active : shareUsers;
+  const planConfirmers = confirmersDb?.[plan.id] ?? (shareUsers.length === 1 ? active : shareUsers);
   const answerOf = (type: string, sid: string, v: number, u: string) =>
     confs.find((c) => c.subject_type === type && c.subject_id === sid && c.subject_version === v && c.user_id === u);
   const myPlanAnswer = answerOf("recurring_plan", plan.id, plan.version, user.id);
@@ -157,7 +169,7 @@ export default function PlanDetail() {
           <ul className="mb-6 space-y-3">
             {insts.map((i) => {
               const ist = STATUS[i.status];
-              const confirmers = [...new Set([...planConfirmers, ...i.installment_payments.map((p) => p.user_id)])];
+              const confirmers = confirmersDb?.[i.id] ?? [...new Set([...planConfirmers, ...i.installment_payments.map((p) => p.user_id)])];
               const mine = answerOf("installment", i.id, i.version, user.id);
               const canAnswer = i.status === "pendiente" && confirmers.includes(user.id) && !mine && !frozen;
               const missing = confirmers.filter((u) => !answerOf("installment", i.id, i.version, u));

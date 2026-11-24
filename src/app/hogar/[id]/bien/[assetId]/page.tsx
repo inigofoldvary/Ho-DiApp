@@ -32,15 +32,17 @@ export default function Bien() {
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmersDb, setConfirmers] = useState<string[] | null>(null);
 
   const load = useCallback(async () => {
     const db = supabase();
-    const [a, c, m, h] = await Promise.all([
+    const [a, c, m, h, k] = await Promise.all([
       db.from("assets").select("*, asset_participants(user_id, amount_cents, profiles(display_name))").eq("id", assetId).single(),
       db.from("confirmations").select("user_id, decision, comment, created_at, subject_version")
         .eq("subject_type", "asset").eq("subject_id", assetId).order("created_at"),
       db.from("household_members").select("user_id, left_at, profiles(display_name)").eq("household_id", id),
       db.from("households").select("status").eq("id", id).single(),
+      db.rpc("subject_confirmers", { p_type: "asset", p_ids: [assetId] }),
     ]);
     if (a.error) return setLoadError(a.error.code === "PGRST116" ? "Este bien no existe o no tienes acceso." : errorText(a.error));
     const as = a.data as unknown as Asset;
@@ -51,6 +53,7 @@ export default function Bien() {
     for (const r of mem) n[r.user_id] = r.profiles?.display_name ?? "?";
     setNames(n);
     setActive(mem.filter((r) => !r.left_at).map((r) => r.user_id));
+    setConfirmers(k.error ? null : ((k.data ?? []) as { user_id: string }[]).map((r) => r.user_id));
     setFrozen(h.data?.status !== "activo");
     signedUrls([as.receipt_path ?? "", as.photo_path ?? ""]).then(setUrls);
   }, [assetId, id]);
@@ -86,8 +89,15 @@ export default function Bien() {
   const iParticipate = asset.asset_participants.some((p) => p.user_id === user.id);
   // Si solo participa una persona, lo confirma todo el hogar (nadie se confirma a sí mismo).
   const soloOne = asset.asset_participants.length === 1;
-  const confirmers = soloOne ? active : asset.asset_participants.map((p) => p.user_id);
-  const iConfirm = confirmers.includes(user.id);
+  // Quién confirma lo decide la base de datos (si aún no tiene la función, regla aproximada).
+  const confirmersAll = confirmersDb ?? (soloOne ? active : asset.asset_participants.map((p) => p.user_id));
+  const partIds = asset.asset_participants.map((p) => p.user_id);
+  // ¿Confirman otros además de (o en vez de) los participantes? Entonces lo enseñamos aparte.
+  const wholeHome = soloOne || confirmersAll.length !== partIds.length || confirmersAll.some((u) => !partIds.includes(u));
+  // En un bien ya confirmado, enseñamos quién lo confirmó (no quién entraría hoy).
+  const confirmers = asset.status === "confirmado" && wholeHome
+    ? confirmersAll.filter((u) => current.some((c) => c.user_id === u)) : confirmersAll;
+  const iConfirm = confirmersAll.includes(user.id);
   const canAnswer = iConfirm && !myAnswer && !frozen;
   const isCreator = asset.created_by === user.id;
   const nameOf = (uid: string, fallback?: string | null) => (uid === user.id ? "Tú" : names[uid] ?? fallback ?? "?");
@@ -130,7 +140,7 @@ export default function Bien() {
                 <span className="font-medium">{nameOf(p.user_id, p.profiles?.display_name)}</span>
                 <span className="font-semibold">{formatEuros(p.amount_cents)}</span>
               </div>
-              {!soloOne && (<>
+              {!wholeHome && (<>
               <p className={`text-sm ${ans?.decision === "confirmar" ? "text-ok" : ans?.decision === "rechazar" ? "text-bad" : "text-muted"}`}>
                 {ans?.decision === "confirmar" ? `✓ Confirmado · ${formatDateTime(ans.created_at)}`
                   : ans?.decision === "rechazar" ? `✗ No es así · ${formatDateTime(ans.created_at)}`
@@ -143,9 +153,9 @@ export default function Bien() {
         })}
       </Card>
 
-      {soloOne && (
+      {wholeHome && (
         <>
-          <h2 className="mb-2 text-sm font-semibold text-muted">Lo tiene que confirmar todo el hogar</h2>
+          <h2 className="mb-2 text-sm font-semibold text-muted">{asset.status === "confirmado" ? "Lo confirmaron" : "Lo tiene que confirmar el hogar"}</h2>
           <Card className="mb-4 divide-y divide-line !p-0">
             {confirmers.map((u) => {
               const ans = current.find((c) => c.user_id === u);
