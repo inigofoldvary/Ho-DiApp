@@ -64,7 +64,7 @@ export function AppBar({ right }: { right?: ReactNode }) {
       <Link href="/" className="flex flex-1 items-center gap-2" aria-label="Ir a mis hogares">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo.png" alt="" className="h-8 w-auto" />
-        <span className="text-lg font-bold tracking-tight text-brand">Home Divide</span>
+        <span className="text-lg font-bold tracking-tight text-logo">Home Divide</span>
       </Link>
       {right}
     </header>

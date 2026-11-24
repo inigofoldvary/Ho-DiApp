@@ -67,7 +67,10 @@ export default function Hogar() {
       <AppBar right={canEdit ? (
         <Link href={`/hogar/${id}/invitar`} className="rounded-full border border-line px-3 py-1 text-sm">+ Invitar</Link>) : undefined} />
       <Link href="/" className="mb-3 block text-sm text-muted">‹ Tus hogares</Link>
-      <h1 className="mb-3 text-2xl font-bold tracking-tight">{home.name}</h1>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h1 className="min-w-0 truncate text-2xl font-bold tracking-tight">{home.name}</h1>
+        <Link href={`/hogar/${id}/reporte`} className="shrink-0 rounded-full border border-line bg-card px-3 py-1 text-sm font-medium">📄 Reporte</Link>
+      </div>
       {home.status !== "activo" && (
         <Link href={`/hogar/${id}/disolver`} className="mb-4 block rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
           {home.status === "disuelto" ? "📦 Este hogar está disuelto. Toca para descargar el PDF final." : "🧊 Disolución en marcha: el inventario está congelado. Toca para confirmar."}
@@ -96,11 +99,10 @@ export default function Hogar() {
         </p>
       )}
 
-      <div className="mb-3 grid grid-cols-2 gap-3">
+      <div className="mb-3">
         {canEdit
-          ? <Link href={`/hogar/${id}/anadir`}><Button>+ Añadir</Button></Link>
-          : <Button disabled>+ Añadir</Button>}
-        <Link href={`/hogar/${id}/reporte`}><Button variant="secondary">Reporte</Button></Link>
+          ? <Link href={`/hogar/${id}/anadir`}><Button className="!bg-logo !text-white">+ Añadir</Button></Link>
+          : <Button disabled className="!bg-logo !text-white">+ Añadir</Button>}
       </div>
       <Link href={`/hogar/${id}/pagos`} className="mb-6 block">
         <Button variant="secondary" className={pendingPays > 0 ? "!border-warn" : ""}>
