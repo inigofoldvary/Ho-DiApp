@@ -33,6 +33,7 @@ export default function Bien() {
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [zoom, setZoom] = useState<string | null>(null);
   const [plans, setPlans] = useState<{ id: string; concept: string; monthly_cents: number; frequency?: string; status: string }[]>([]);
   const [confirmersDb, setConfirmers] = useState<string[] | null>(null);
 
@@ -111,16 +112,25 @@ export default function Bien() {
   return (
     <main className="pb-28">
       <Header title={asset.name} back={`/hogar/${id}`} />
+      {zoom && (
+        <div role="dialog" aria-modal="true" onClick={() => setZoom(null)}
+          className="fixed inset-0 z-50 flex flex-col bg-black/95">
+          <button type="button" onClick={() => setZoom(null)}
+            className="m-3 self-start rounded-full bg-white/15 px-4 py-2 text-sm font-medium text-white">‹ Volver</button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={zoom} alt="" className="min-h-0 flex-1 object-contain p-2" />
+        </div>
+      )}
 
       {(urls[asset.photo_path ?? ""] || urls[asset.receipt_path ?? ""]) && (
         <div className="mb-4 grid grid-cols-2 gap-3">
           {[["Objeto", asset.photo_path], ["Ticket", asset.receipt_path]].map(([label, p]) =>
             p && urls[p] ? (
-              <a key={label} href={urls[p]} target="_blank" rel="noreferrer" className="relative block aspect-square overflow-hidden rounded-2xl bg-card">
+              <button type="button" key={label} onClick={() => setZoom(urls[p])} className="relative block aspect-square overflow-hidden rounded-2xl bg-card">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={urls[p]} alt={label!} className="h-full w-full object-cover" />
                 <span className="absolute bottom-2 left-2 rounded-full bg-black/60 px-2 py-0.5 text-xs text-white">{label}</span>
-              </a>
+              </button>
             ) : null)}
         </div>
       )}
