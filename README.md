@@ -8,3 +8,5 @@ compartido, confirmado por los implicados.
 - Claves: copia `.env.example` como `.env.local` y pon la URL y la clave pública de Supabase.
 
 Arrancar en local: `npm install` y `npm run dev`.
+
+Publicada en: https://ho-di-app.vercel.app (Vercel publica sola cada cambio en `main`).
