@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
@@ -17,6 +17,13 @@ export default function NuevoHogar() {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hasHomes, setHasHomes] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    supabase().from("household_members").select("household_id", { count: "exact", head: true }).eq("user_id", user.id)
+      .then(({ count }) => setHasHomes((count ?? 0) > 0));
+  }, [user]);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -31,7 +38,15 @@ export default function NuevoHogar() {
   if (!user) return <Loading />;
   return (
     <main>
-      <Header title="Crear hogar" back="/" />
+      <Header title="Crear hogar" back={hasHomes ? "/" : undefined} right={
+        <button type="button" className="text-sm text-muted" onClick={async () => { await supabase().auth.signOut(); router.replace("/entrar"); }}>
+          Salir
+        </button>} />
+      {!hasHomes && (
+        <p className="mb-5 rounded-xl bg-line/60 px-4 py-3 text-sm text-muted">
+          Has entrado como <b className="text-ink">{user.email}</b>. ¿No es tu cuenta? Pulsa <b>Salir</b> arriba a la derecha.
+        </p>
+      )}
       <form onSubmit={create} className="space-y-6">
         <div>
           <p className="mb-2 text-sm font-medium text-muted">¿Qué tipo de hogar es?</p>
