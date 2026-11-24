@@ -30,6 +30,8 @@ export default function Home() {
 
   if (loadError) return <main className="pt-10"><ErrorBox>No se pudieron cargar tus hogares: {loadError}</ErrorBox></main>;
   if (!homes) return <Loading />;
+  const active = homes.filter((h) => h.status !== "disuelto");
+  const past = homes.filter((h) => h.status === "disuelto");
   return (
     <main>
       <AppBar right={
@@ -38,26 +40,40 @@ export default function Home() {
         </button>} />
       <h1 className="mb-3 text-xl font-semibold">Tus hogares</h1>
       <div className="space-y-3">
-        {homes.map((h) => (
-          <Link key={h.id} href={`/hogar/${h.id}`} className="block">
-            <Card className="flex items-center gap-4">
-              <span className="text-3xl">{h.kind === "pareja" ? "💑" : "🏠"}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-semibold">{h.name}</span>
-                <span className="block text-sm text-muted">
-                  {h.kind === "pareja" ? "Pareja" : "Compañeros de piso"}
-                  {h.status === "disolviendo" ? " · disolviéndose" : h.status === "disuelto" ? " · disuelto" : ""}
-                </span>
-              </span>
-              <span className="text-xl text-muted">›</span>
-            </Card>
-          </Link>
-        ))}
+        {active.map((h) => <HomeCard key={h.id} h={h} />)}
         <Link href="/hogar/nuevo" className="block pt-2">
           <Button variant="secondary">+ Añadir otro hogar</Button>
         </Link>
         <p className="text-center text-xs text-muted">Por ejemplo, el piso de la ciudad y la casa de verano.</p>
       </div>
+      {past.length > 0 && (
+        <section className="mt-8">
+          <h2 className="mb-1 text-base font-semibold">Historial</h2>
+          <p className="mb-3 text-sm text-muted">Hogares disueltos. Puedes consultarlos y volver a descargar su PDF cuando quieras.</p>
+          <div className="space-y-3 opacity-80">
+            {past.map((h) => <HomeCard key={h.id} h={h} />)}
+          </div>
+        </section>
+      )}
     </main>
+  );
+}
+
+function HomeCard({ h }: { h: Household }) {
+  const gone = h.status === "disuelto";
+  return (
+    <Link href={`/hogar/${h.id}`} className="block">
+      <Card className="flex items-center gap-4">
+        <span className={`text-3xl ${gone ? "grayscale" : ""}`}>{h.kind === "pareja" ? "💑" : "🏠"}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-semibold">{h.name}</span>
+          <span className="block text-sm text-muted">
+            {h.kind === "pareja" ? "Pareja" : "Compañeros de piso"}
+            {h.status === "disolviendo" ? " · disolviéndose" : gone ? " · disuelto" : ""}
+          </span>
+        </span>
+        <span className="text-xl text-muted">›</span>
+      </Card>
+    </Link>
   );
 }
