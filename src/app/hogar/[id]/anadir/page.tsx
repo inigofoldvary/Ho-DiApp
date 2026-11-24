@@ -45,6 +45,24 @@ function AnadirBien() {
   const [photo, setPhoto] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [ocr, setOcr] = useState<{ state: "leyendo" | "ok" | "nada"; text?: string } | null>(null);
+
+  async function pickReceipt(f: File | null) {
+    setReceipt(f);
+    setOcr(null);
+    if (!f) return;
+    setOcr({ state: "leyendo" });
+    try {
+      const { readTicket } = await import("@/lib/ticket");
+      const g = await readTicket(f);
+      const bits: string[] = [];
+      if (g.totalCents) { setPrice(centsToInput(g.totalCents)); bits.push(`total ${formatEuros(g.totalCents)}`); }
+      if (g.date) { setDate(g.date); bits.push(`fecha ${g.date.split("-").reverse().join("/")}`); }
+      setOcr(bits.length ? { state: "ok", text: bits.join(" y ") } : { state: "nada" });
+    } catch {
+      setOcr({ state: "nada" });
+    }
+  }
 
   useEffect(() => {
     if (!user) return;
@@ -180,9 +198,16 @@ function AnadirBien() {
         </section>
 
         <section className="grid grid-cols-2 gap-3">
-          <PhotoPicker label={existing.receipt && !receipt ? "Ticket guardado ✓ (toca para cambiar)" : "Foto del ticket"} file={receipt} onChange={setReceipt} />
+          <PhotoPicker label={existing.receipt && !receipt ? "Ticket guardado ✓ (toca para cambiar)" : "Foto del ticket"} file={receipt} onChange={pickReceipt} />
           <PhotoPicker label={existing.photo && !photo ? "Foto guardada ✓ (toca para cambiar)" : "Foto del objeto"} file={photo} onChange={setPhoto} />
         </section>
+        {ocr && (
+          <p className={`-mt-2 rounded-xl px-3 py-2 text-sm ${ocr.state === "ok" ? "bg-ok-bg text-ok" : "bg-line/60 text-muted"}`}>
+            {ocr.state === "leyendo" ? "📄 Leyendo el ticket…"
+              : ocr.state === "ok" ? `📄 He leído del ticket: ${ocr.text}. Revisa que esté bien.`
+              : "📄 No he podido leer el ticket. Rellénalo a mano."}
+          </p>
+        )}
         {!receipt && !existing.receipt && <p className="-mt-3 text-xs text-muted">El ticket es opcional, pero recomendable. Si no lo pones, saldrá como “sin ticket”.</p>}
 
         {isPiso && (
