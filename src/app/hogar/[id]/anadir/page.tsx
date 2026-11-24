@@ -1,11 +1,12 @@
 "use client";
+import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros, parseEuros } from "@/lib/money";
 import { uploadPhoto } from "@/lib/photos";
-import { Button, ErrorBox, Field, Header, Loading } from "@/components/ui";
+import { Button, ErrorBox, Field, Loading } from "@/components/ui";
 
 type Member = { user_id: string; name: string };
 type Row = { user_id: string; name: string; involved: boolean; amount: string };
@@ -74,7 +75,7 @@ function AnadirBien() {
           .map((m) => ({ user_id: m.user_id, name: m.profiles?.display_name ?? "?" }))
           .sort((a, b) => (a.user_id === user.id ? -1 : b.user_id === user.id ? 1 : a.name.localeCompare(b.name)));
         if (!editId) {
-          setRows(members.map((m) => ({ ...m, involved: true, amount: "" })));
+          setRows(members.map((m) => ({ ...m, involved: false, amount: "" })));
           return;
         }
         db.from("assets").select("name, total_cents, purchase_date, visibility, receipt_path, photo_path, asset_participants(user_id, amount_cents)")
@@ -154,7 +155,7 @@ function AnadirBien() {
 
   return (
     <main>
-      <Header title={editId ? "Editar bien" : "Añadir bien"} back={editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`} />
+      <Link href={editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`} className="mb-4 inline-block py-2 text-sm font-medium text-muted">‹ Volver</Link>
       <form onSubmit={save} className="space-y-5">
         <Field label="¿Qué es?" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120}
           placeholder="Sofá, nevera, coche…" autoFocus />
@@ -177,14 +178,14 @@ function AnadirBien() {
           <div className="divide-y divide-line rounded-2xl border border-line bg-card">
             {rows.map((r, i) => (
               <div key={r.user_id} className={`flex items-center gap-3 px-4 py-2.5 ${r.involved ? "" : "opacity-50"}`}>
-                {isPiso && (
+                {(
                   <input type="checkbox" checked={r.involved} aria-label={`${r.name} participa`}
                     onChange={(e) => update(i, { involved: e.target.checked, amount: e.target.checked ? r.amount : "" })}
                     className="h-5 w-5 accent-[var(--brand)]" />
                 )}
                 <span className="flex-1 truncate">{r.name}{r.user_id === user?.id ? " (tú)" : ""}</span>
                 <div className="flex items-center gap-1">
-                  <input value={r.amount} onChange={(e) => update(i, { amount: e.target.value })} disabled={!r.involved}
+                  <input value={r.amount} onChange={(e) => update(i, { amount: e.target.value, involved: r.involved || e.target.value.trim() !== "" })}
                     inputMode="decimal" placeholder="0" aria-label={`Cuánto puso ${r.name}`}
                     className="w-24 rounded-lg border border-line bg-bg px-2 py-1.5 text-right outline-none focus:border-brand" />
                   <span className="text-muted">€</span>
@@ -193,7 +194,7 @@ function AnadirBien() {
             ))}
           </div>
           {total === null && <p className="mt-1 text-xs text-muted">Pon primero el precio total para poder repartirlo.</p>}
-          {isPiso && <p className="mt-1 text-xs text-muted">Marca solo a quienes participan en esta compra: ellos la confirman. Si participas tú solo, la confirmará el resto del piso.</p>}
+          <p className="mt-1 text-xs text-muted">Marca a quienes participan en esta compra: ellos la confirman. Si participa uno solo, la confirma el resto del hogar.</p>
           {status && (
             <p className={`mt-2 rounded-xl px-3 py-2 text-sm ${status.ok ? "bg-ok-bg text-ok" : "bg-warn-bg text-warn"}`}>
               {status.ok ? "✓ " : ""}{status.text}
