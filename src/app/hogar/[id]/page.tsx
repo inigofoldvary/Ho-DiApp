@@ -7,7 +7,7 @@ import { useRequireUser } from "@/lib/useSession";
 import { formatEuros } from "@/lib/money";
 import { signedUrls } from "@/lib/photos";
 import { STATUS } from "@/lib/status";
-import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
+import { AppBar, Button, Card, ErrorBox, Loading } from "@/components/ui";
 
 type Asset = {
   id: string; name: string; total_cents: number; status: string; receipt_path: string | null; photo_path: string | null;
@@ -52,8 +52,10 @@ export default function Hogar() {
 
   return (
     <main>
-      <Header title={home.name} back="/" right={
+      <AppBar right={
         <Link href={`/hogar/${id}/invitar`} className="rounded-full border border-line px-3 py-1 text-sm">+ Invitar</Link>} />
+      <Link href="/" className="mb-3 block text-sm text-muted">‹ Tus hogares</Link>
+      <h1 className="mb-3 text-2xl font-bold tracking-tight">{home.name}</h1>
 
       <Card className="mb-5 text-center">
         <p className="text-sm text-muted">Total registrado</p>

@@ -56,3 +56,17 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
 export function Loading() {
   return <p className="py-16 text-center text-muted">Cargando…</p>;
 }
+
+/** Barra superior con el logo: siempre lleva a la lista de hogares. */
+export function AppBar({ right }: { right?: ReactNode }) {
+  return (
+    <header className="sticky top-0 z-10 -mx-4 mb-4 flex items-center gap-2 bg-bg/95 px-4 py-3 backdrop-blur">
+      <Link href="/" className="flex flex-1 items-center gap-2" aria-label="Ir a mis hogares">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="" className="h-8 w-auto" />
+        <span className="text-lg font-bold tracking-tight text-brand">Home Divide</span>
+      </Link>
+      {right}
+    </header>
+  );
+}

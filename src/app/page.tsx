@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
-import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
+import { AppBar, Button, Card, ErrorBox, Loading } from "@/components/ui";
 
 type Household = { id: string; name: string; kind: string; status: string };
 
@@ -24,8 +24,7 @@ export default function Home() {
         const list = (data ?? []).map((r: { households: Household | Household[] }) =>
           Array.isArray(r.households) ? r.households[0] : r.households).filter(Boolean);
         if (list.length === 0) router.replace("/hogar/nuevo");
-        else if (list.length === 1) router.replace(`/hogar/${list[0].id}`);
-        else setHomes(list);
+        else setHomes(list.sort((a, b) => a.name.localeCompare(b.name)));
       });
   }, [user, router]);
 
@@ -33,20 +32,31 @@ export default function Home() {
   if (!homes) return <Loading />;
   return (
     <main>
-      <Header title="Tus hogares" right={
+      <AppBar right={
         <button className="text-sm text-muted" onClick={async () => { await supabase().auth.signOut(); router.replace("/entrar"); }}>
           Salir
         </button>} />
+      <h1 className="mb-3 text-xl font-semibold">Tus hogares</h1>
       <div className="space-y-3">
         {homes.map((h) => (
           <Link key={h.id} href={`/hogar/${h.id}`} className="block">
-            <Card>
-              <p className="font-semibold">{h.name}</p>
-              <p className="text-sm text-muted">{h.kind === "pareja" ? "Pareja" : "Compañeros de piso"}{h.status !== "activo" ? " · " + h.status : ""}</p>
+            <Card className="flex items-center gap-4">
+              <span className="text-3xl">{h.kind === "pareja" ? "💑" : "🏠"}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-semibold">{h.name}</span>
+                <span className="block text-sm text-muted">
+                  {h.kind === "pareja" ? "Pareja" : "Compañeros de piso"}
+                  {h.status === "disolviendo" ? " · disolviéndose" : h.status === "disuelto" ? " · disuelto" : ""}
+                </span>
+              </span>
+              <span className="text-xl text-muted">›</span>
             </Card>
           </Link>
         ))}
-        <Link href="/hogar/nuevo"><Button variant="secondary" className="mt-2">+ Crear otro hogar</Button></Link>
+        <Link href="/hogar/nuevo" className="block pt-2">
+          <Button variant="secondary">+ Añadir otro hogar</Button>
+        </Link>
+        <p className="text-center text-xs text-muted">Por ejemplo, el piso de la ciudad y la casa de verano.</p>
       </div>
     </main>
   );
