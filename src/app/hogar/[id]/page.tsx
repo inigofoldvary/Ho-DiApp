@@ -24,15 +24,18 @@ export default function Hogar() {
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState("");
   const [pending, setPending] = useState<Set<string>>(new Set());
+  const [pendingPays, setPendingPays] = useState(0);
 
   useEffect(() => {
     if (!user) return;
     const db = supabase();
     db.from("households").select("name, status").eq("id", id).single().then(({ data, error }) => (error ? setLoadError(errorText(error)) : setHome(data)));
-    db.rpc("sync_installments", { p_household: id });
-    db.rpc("my_pending", { p_household: id }).then(({ data }) =>
-      setPending(new Set(((data ?? []) as { subject_type: string; subject_id: string }[])
-        .filter((r) => r.subject_type === "asset").map((r) => r.subject_id))));
+    db.rpc("sync_installments", { p_household: id }).then(() =>
+      db.rpc("my_pending", { p_household: id }).then(({ data }) => {
+        const rows = (data ?? []) as { subject_type: string; subject_id: string }[];
+        setPending(new Set(rows.filter((r) => r.subject_type === "asset").map((r) => r.subject_id)));
+        setPendingPays(rows.filter((r) => r.subject_type === "installment" || r.subject_type === "recurring_plan").length);
+      }));
     db.from("assets")
       .select("id, name, total_cents, status, receipt_path, photo_path, purchase_date, visibility, asset_participants(user_id, amount_cents, profiles(display_name))")
       .eq("household_id", id).order("purchase_date", { ascending: false })
@@ -63,10 +66,15 @@ export default function Hogar() {
         </p>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-3">
+      <div className="mb-3 grid grid-cols-2 gap-3">
         <Link href={`/hogar/${id}/anadir`}><Button>+ Añadir</Button></Link>
         <Link href={`/hogar/${id}/reporte`}><Button variant="secondary">Reporte</Button></Link>
       </div>
+      <Link href={`/hogar/${id}/pagos`} className="mb-6 block">
+        <Button variant="secondary" className={pendingPays > 0 ? "!border-warn" : ""}>
+          🔁 Pagos recurrentes{pendingPays > 0 ? ` · ${pendingPays} por confirmar` : ""}
+        </Button>
+      </Link>
 
       {assets.length === 0 ? (
         <p className="py-10 text-center text-muted">Aún no hay nada apuntado.<br />Empieza por lo más caro: el sofá, la nevera…</p>

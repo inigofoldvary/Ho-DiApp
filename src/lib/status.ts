@@ -11,3 +11,8 @@ export function formatDateTime(iso: string) {
 export function formatDate(d: string) {
   return new Date(d + "T00:00:00").toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" });
 }
+
+export function formatMonth(d: string) {
+  const s = new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}

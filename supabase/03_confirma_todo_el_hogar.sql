@@ -1,5 +1,6 @@
 -- =====================================================================
 -- HO-DIAPP · v1.2: nadie se confirma a sí mismo
+-- (vale para bienes y para pagos recurrentes)
 -- Si un bien lo pagó (o participa) UNA sola persona, lo tienen que
 -- confirmar los demás miembros del hogar. Si participan varios,
 -- confirman solo los que participan (como antes).
@@ -18,10 +19,23 @@ returns setof uuid language sql stable security definer set search_path = public
    where t = 'asset' and a.id = s and m.left_at is null
      and (select count(*) from asset_participants where asset_id = s) = 1
   union
-  select user_id from recurring_plan_shares where t = 'recurring_plan' and plan_id = s
+  -- Pagos recurrentes: misma regla (si participa uno solo, confirma todo el hogar)
+  select user_id from recurring_plan_shares
+   where t = 'recurring_plan' and plan_id = s
+     and (select count(*) from recurring_plan_shares where plan_id = s) >= 2
   union
+  select m.user_id from recurring_plans r join household_members m on m.household_id = r.household_id
+   where t = 'recurring_plan' and r.id = s and m.left_at is null
+     and (select count(*) from recurring_plan_shares where plan_id = s) = 1
+  union
+  -- Cuotas: confirman los del pago recurrente (con la misma regla) y quien aparezca pagando
   select sh.user_id from installments i join recurring_plan_shares sh on sh.plan_id = i.plan_id
    where t = 'installment' and i.id = s
+     and (select count(*) from recurring_plan_shares where plan_id = i.plan_id) >= 2
+  union
+  select m.user_id from installments i join household_members m on m.household_id = i.household_id
+   where t = 'installment' and i.id = s and m.left_at is null
+     and (select count(*) from recurring_plan_shares where plan_id = i.plan_id) = 1
   union
   select ip.user_id from installment_payments ip where t = 'installment' and ip.installment_id = s
   union
@@ -60,7 +74,7 @@ language sql stable security definer set search_path = public as $$
   select 'recurring_plan', r.id, r.concept, r.monthly_cents, r.start_date, r.updated_at
     from recurring_plans r
    where r.household_id = p_household and r.status = 'pendiente'
-     and exists (select 1 from recurring_plan_shares s where s.plan_id = r.id and s.user_id = auth.uid())
+     and exists (select 1 from subject_participants('recurring_plan', r.id) u where u = auth.uid())
      and not exists (select 1 from confirmations c where c.subject_type = 'recurring_plan' and c.subject_id = r.id
                       and c.subject_version = r.version and c.user_id = auth.uid())
   union all
@@ -87,5 +101,11 @@ declare a record;
 begin
   for a in select id from public.assets loop
     perform public.recompute_status('asset', a.id);
+  end loop;
+  for a in select id from public.recurring_plans where status <> 'finalizado' loop
+    perform public.recompute_status('recurring_plan', a.id);
+  end loop;
+  for a in select id from public.installments loop
+    perform public.recompute_status('installment', a.id);
   end loop;
 end $$;
