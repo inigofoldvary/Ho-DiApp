@@ -5,12 +5,13 @@ import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros, parseEuros } from "@/lib/money";
 import { loadMembers, type Member } from "@/lib/members";
-import { STATUS, formatDateTime, formatMonth } from "@/lib/status";
+import { STATUS, formatDateTime } from "@/lib/status";
+import { formatPeriod, perFreq } from "@/lib/frequency";
 import { SharesEditor, centsToInput, sharesCheck, type ShareRow } from "@/components/SharesEditor";
 import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
 type Plan = {
-  id: string; household_id: string; concept: string; monthly_cents: number; start_date: string; installments_count: number | null;
+  id: string; household_id: string; concept: string; monthly_cents: number; start_date: string; installments_count: number | null; frequency?: string;
   status: string; version: number; visibility: string; created_by: string; created_at: string; asset_id: string | null;
   recurring_plan_shares: { user_id: string; amount_cents: number }[];
   assets: { name: string } | null;
@@ -76,7 +77,7 @@ export default function PlanDetail() {
 
   useEffect(() => { load(); }, [load]);
 
-  if (error && !plan) return <main><Header title="Pago" back={`/hogar/${id}/pagos`} /><ErrorBox>{error}</ErrorBox></main>;
+  if (error && !plan) return <main><Header title="Pago" back={`/hogar/${id}`} /><ErrorBox>{error}</ErrorBox></main>;
   if (!plan || !user) return <Loading />;
 
   const nameOf = (u: string) => (u === user.id ? "Tú" : members.find((m) => m.user_id === u)?.name ?? "Antiguo miembro");
@@ -112,13 +113,13 @@ export default function PlanDetail() {
 
   return (
     <main className="pb-28">
-      <Header title={plan.concept} back={`/hogar/${id}/pagos`} />
+      <Header title={plan.concept} back={`/hogar/${id}`} />
       <ErrorBox>{error}</ErrorBox>
 
       <Card className="mb-4">
-        <p className="text-3xl font-bold tracking-tight">{formatEuros(plan.monthly_cents)}<span className="text-base font-normal text-muted"> /mes</span></p>
+        <p className="text-3xl font-bold tracking-tight">{formatEuros(plan.monthly_cents)}<span className="text-base font-normal text-muted"> {perFreq(plan.frequency)}</span></p>
         <p className="text-sm text-muted">
-          Desde {formatMonth(plan.start_date).toLowerCase()} · {plan.installments_count ? `${plan.installments_count} cuotas` : "sin fin"}
+          Desde {formatPeriod(plan.start_date, plan.frequency === "año" ? null : plan.frequency).toLowerCase()} · {plan.installments_count ? `${plan.installments_count} cuotas` : "sin fin"}
           {plan.assets ? ` · para: ${plan.assets.name}` : ""}
         </p>
         <div className="mt-3 flex flex-wrap gap-1.5 text-xs font-medium">
@@ -157,7 +158,7 @@ export default function PlanDetail() {
         <div className="mb-5">
           <Button variant="secondary" className="!text-bad" disabled={busy} onClick={async () => {
             if (!confirm("¿Borrar este pago recurrente?")) return;
-            if (await call("delete_recurring_plan", { p_plan: plan.id })) router.replace(`/hogar/${id}/pagos`);
+            if (await call("delete_recurring_plan", { p_plan: plan.id })) router.replace(`/hogar/${id}`);
           }}>Borrar pago</Button>
           {plan.status === "rechazado" && <p className="mt-2 text-xs text-muted">Alguien dijo que no es así. Bórralo y créalo de nuevo con los datos correctos.</p>}
         </div>
@@ -177,7 +178,7 @@ export default function PlanDetail() {
                 <li key={i.id}>
                   <Card>
                     <div className="flex items-baseline justify-between">
-                      <span className="font-semibold">{formatMonth(i.period)}</span>
+                      <span className="font-semibold">{formatPeriod(i.period, plan.frequency)}</span>
                       <span className="font-semibold">{formatEuros(i.amount_cents)}</span>
                     </div>
                     <p className="text-xs text-muted">
@@ -208,7 +209,7 @@ export default function PlanDetail() {
       {exceptionFor && (
         <div className="fixed inset-0 z-20 flex items-end bg-black/40" onClick={() => setExceptionFor(null)}>
           <div className="mx-auto max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-bg p-4" onClick={(e) => e.stopPropagation()}>
-            <p className="mb-1 text-lg font-semibold">{formatMonth(exceptionFor.period)}: ¿qué pasó?</p>
+            <p className="mb-1 text-lg font-semibold">{formatPeriod(exceptionFor.period, plan.frequency)}: ¿qué pasó?</p>
             <p className="mb-4 text-sm text-muted">Pon lo que pagó de verdad cada uno este mes. Los demás tendrán que confirmarlo.</p>
             <SharesEditor rows={excRows} setRows={setExcRows} total={excTotal || null}
               me={user.id} canToggle title="Lo que pagó cada uno" />

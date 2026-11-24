@@ -7,6 +7,7 @@ import { useRequireUser } from "@/lib/useSession";
 import { formatEuros } from "@/lib/money";
 import { signedUrls } from "@/lib/photos";
 import { STATUS, formatDate, formatDateTime } from "@/lib/status";
+import { perFreq } from "@/lib/frequency";
 import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
 type Asset = {
@@ -32,6 +33,7 @@ export default function Bien() {
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [plans, setPlans] = useState<{ id: string; concept: string; monthly_cents: number; frequency?: string; status: string }[]>([]);
   const [confirmersDb, setConfirmers] = useState<string[] | null>(null);
 
   const load = useCallback(async () => {
@@ -59,6 +61,10 @@ export default function Bien() {
   }, [assetId, id]);
 
   useEffect(() => { if (user) load(); }, [user, load]);
+  useEffect(() => {
+    if (!user) return;
+    supabase().from("recurring_plans").select("*").eq("asset_id", assetId).then(({ data }) => setPlans(data ?? []));
+  }, [user, assetId]);
 
   async function respond(decision: "confirmar" | "rechazar") {
     setBusy(true); setError("");
@@ -130,7 +136,23 @@ export default function Bien() {
         </div>
       </Card>
 
-      <h2 className="mb-2 text-sm font-semibold text-muted">Quién puso cuánto</h2>
+      {plans.length > 0 && (
+        <>
+          <h2 className="mb-2 text-sm font-semibold text-muted">Se sigue pagando</h2>
+          <div className="mb-4 space-y-2">
+            {plans.map((p) => (
+              <Link key={p.id} href={`/hogar/${id}/pagos/${p.id}`} className="block">
+                <Card className="flex items-center justify-between gap-2">
+                  <span className="truncate font-medium">🔁 {p.concept}</span>
+                  <span className="shrink-0 font-semibold">{formatEuros(p.monthly_cents)}<span className="text-sm font-normal text-muted">{perFreq(p.frequency)}</span> ›</span>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
+
+      <h2 className="mb-2 text-sm font-semibold text-muted">{plans.length > 0 ? "Entrada: quién puso cuánto" : "Quién puso cuánto"}</h2>
       <Card className="mb-4 divide-y divide-line !p-0">
         {asset.asset_participants.map((p) => {
           const ans = current.find((c) => c.user_id === p.user_id);

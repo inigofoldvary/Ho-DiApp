@@ -42,8 +42,8 @@ export function SharesEditor({ rows, setRows, total, me, canToggle, title }: {
           onClick={() => setRows(rows.map((r) => (r.user_id === me ? { ...r, involved: true, amount: centsToInput(total!) } : { ...r, amount: "" })))}
           className="rounded-full border border-line bg-card px-3 py-1.5 text-sm disabled:opacity-40">Lo pago yo todo</button>
         <button type="button" disabled={total === null}
-          onClick={() => { const parts = splitEqual(total!, check.involved.length || 1); let k = 0;
-            setRows(rows.map((r) => (r.involved ? { ...r, amount: centsToInput(parts[k++]) } : r))); }}
+          onClick={() => { const all = check.involved.length <= 1; const parts = splitEqual(total!, all ? rows.length : check.involved.length); let k = 0;
+            setRows(rows.map((r) => (all || r.involved ? { ...r, involved: true, amount: centsToInput(parts[k++]) } : r))); }}
           className="rounded-full border border-line bg-card px-3 py-1.5 text-sm disabled:opacity-40">A partes iguales</button>
       </div>
       <div className="divide-y divide-line rounded-2xl border border-line bg-card">
@@ -55,7 +55,7 @@ export function SharesEditor({ rows, setRows, total, me, canToggle, title }: {
                 className="h-5 w-5 accent-[var(--brand)]" />
             )}
             <span className="flex-1 truncate">{r.name}{r.user_id === me ? " (tú)" : ""}</span>
-            <input value={r.amount} onChange={(e) => update(i, { amount: e.target.value })} disabled={!r.involved}
+            <input value={r.amount} onChange={(e) => update(i, { amount: e.target.value, involved: r.involved || e.target.value.trim() !== "" })}
               inputMode="decimal" placeholder="0" aria-label={`Cuánto pone ${r.name}`}
               className="w-24 rounded-lg border border-line bg-bg px-2 py-1.5 text-right outline-none focus:border-brand" />
             <span className="text-muted">€</span>

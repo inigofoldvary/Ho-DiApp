@@ -7,6 +7,8 @@ import { useRequireUser } from "@/lib/useSession";
 import { formatEuros, parseEuros } from "@/lib/money";
 import { uploadPhoto } from "@/lib/photos";
 import { Button, ErrorBox, Field, Loading } from "@/components/ui";
+import { SharesEditor, sharesCheck, type ShareRow } from "@/components/SharesEditor";
+import { FREQS, type Frequency } from "@/lib/frequency";
 
 type Member = { user_id: string; name: string };
 type Row = { user_id: string; name: string; involved: boolean; amount: string };
@@ -46,6 +48,14 @@ function AnadirBien() {
   const [photo, setPhoto] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Pago que se repite (alquiler, letra del coche, seguro…)
+  const [repeats, setRepeats] = useState(false);
+  const [freq, setFreq] = useState<Frequency>("mes");
+  const [fee, setFee] = useState("");
+  const [start, setStart] = useState(today());
+  const [endless, setEndless] = useState(true);
+  const [count, setCount] = useState("");
+  const [feeRows, setFeeRows] = useState<ShareRow[]>([]);
   const [ocr, setOcr] = useState<{ state: "leyendo" | "ok" | "nada"; text?: string } | null>(null);
 
   async function pickReceipt(f: File | null) {
@@ -76,6 +86,7 @@ function AnadirBien() {
           .sort((a, b) => (a.user_id === user.id ? -1 : b.user_id === user.id ? 1 : a.name.localeCompare(b.name)));
         if (!editId) {
           setRows(members.map((m) => ({ ...m, involved: false, amount: "" })));
+          setFeeRows(members.map((m) => ({ ...m, involved: false, amount: "" })));
           return;
         }
         db.from("assets").select("name, total_cents, purchase_date, visibility, receipt_path, photo_path, asset_participants(user_id, amount_cents)")
@@ -96,7 +107,15 @@ function AnadirBien() {
   const sum = involved.reduce((s, r) => s + (parseEuros(r.amount) ?? 0), 0);
   const badAmount = involved.some((r) => r.amount.trim() !== "" && parseEuros(r.amount) === null);
   const diff = total === null ? null : total - sum;
-  const canSave = !!name.trim() && total !== null && total > 0 && diff === 0 && !badAmount && involved.length > 0 && !busy;
+  const assetOk = total !== null && total > 0 && diff === 0 && !badAmount && involved.length > 0;
+  // Con pago periódico, la entrada es opcional: si no hay, solo se crea el pago.
+  const hasDown = !repeats || price.trim() !== "";
+  const feeTotal = parseEuros(fee);
+  const feeCheck = sharesCheck(feeRows, feeTotal);
+  const n = parseInt(count, 10);
+  const countOk = endless || (Number.isInteger(n) && n > 0 && n <= 2000);
+  const planOk = feeCheck.ok && countOk && /^\d{4}-\d{2}-\d{2}$/.test(start);
+  const canSave = !!name.trim() && !busy && (repeats ? planOk && (!hasDown || assetOk) : assetOk);
 
   const status = useMemo(() => {
     if (total === null || total <= 0) return null;
@@ -131,18 +150,31 @@ function AnadirBien() {
     setBusy(true); setError("");
     try {
       const [receiptPath, photoPath] = await Promise.all([
-        receipt ? uploadPhoto(id, receipt) : Promise.resolve(existing.receipt),
-        photo ? uploadPhoto(id, photo) : Promise.resolve(existing.photo),
+        receipt && hasDown ? uploadPhoto(id, receipt) : Promise.resolve(existing.receipt),
+        photo && hasDown ? uploadPhoto(id, photo) : Promise.resolve(existing.photo),
       ]);
       const shares = involved.map((r) => ({ user_id: r.user_id, amount_cents: parseEuros(r.amount) ?? 0 }));
       const common = {
         p_name: name, p_total_cents: total, p_purchase_date: date, p_shares: shares,
         p_visibility: isPrivate && involved.length >= 2 ? "implicados" : "hogar", p_receipt_path: receiptPath, p_photo_path: photoPath,
       };
-      const { error } = editId
-        ? await supabase().rpc("update_asset", { p_asset: editId, ...common })
-        : await supabase().rpc("create_asset", { p_household: id, ...common });
-      if (error) throw error;
+      let assetId: string | null = null;
+      if (hasDown) {
+        const { data, error } = editId
+          ? await supabase().rpc("update_asset", { p_asset: editId, ...common })
+          : await supabase().rpc("create_asset", { p_household: id, ...common });
+        if (error) throw error;
+        assetId = editId ?? (data as string);
+      }
+      if (repeats && !editId) {
+        const { error } = await supabase().rpc("create_recurring_plan", {
+          p_household: id, p_concept: name, p_monthly_cents: feeTotal, p_start_date: start,
+          p_installments_count: endless ? null : n, p_shares: feeCheck.shares,
+          p_visibility: isPrivate && feeCheck.involved.length >= 2 ? "implicados" : "hogar",
+          p_asset: assetId, p_frequency: freq,
+        });
+        if (error) throw assetId ? new Error(`Se guardó ${name.trim()}, pero no el pago periódico: ${errorText(error)}`) : error;
+      }
       router.replace(editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`);
     } catch (err) {
       setError(errorText(err));
@@ -158,13 +190,58 @@ function AnadirBien() {
       <Link href={editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`} className="mb-4 inline-block py-2 text-sm font-medium text-muted">‹ Volver</Link>
       <form onSubmit={save} className="space-y-5">
         <Field label="¿Qué es?" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120}
-          placeholder="Sofá, nevera, coche…" autoFocus />
+          placeholder="Sofá, nevera, coche, alquiler…" autoFocus />
+
+        {!editId && (
+          <section className="rounded-2xl border border-line bg-card p-4">
+            <label className="flex items-start gap-3">
+              <input type="checkbox" checked={repeats} onChange={(e) => setRepeats(e.target.checked)}
+                className="mt-0.5 h-5 w-5 accent-[var(--brand)]" />
+              <span>
+                <span className="block font-medium">Es un pago que se repite</span>
+                <span className="block text-sm text-muted">Alquiler, internet, la letra del coche, un seguro…</span>
+              </span>
+            </label>
+            {repeats && (
+              <div className="mt-4 space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Cuota (€)" value={fee} onChange={(e) => setFee(e.target.value)} inputMode="decimal" placeholder="0,00" />
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-muted">Se paga cada</span>
+                    <select value={freq} onChange={(e) => setFreq(e.target.value as Frequency)}
+                      className="w-full rounded-xl border border-line bg-bg px-4 py-3 outline-none focus:border-brand">
+                      {FREQS.map((f) => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Primer pago" type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+                  <div>
+                    <span className="mb-1 block text-sm font-medium text-muted">¿Cuántas cuotas?</span>
+                    <input value={endless ? "" : count} onChange={(e) => setCount(e.target.value)} disabled={endless} inputMode="numeric"
+                      placeholder="Ej. 48" aria-label="Número de cuotas"
+                      className="w-full rounded-xl border border-line bg-bg px-4 py-3 outline-none focus:border-brand disabled:opacity-40" />
+                    <label className="mt-1.5 flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={endless} onChange={(e) => setEndless(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
+                      Sin fin
+                    </label>
+                  </div>
+                </div>
+                <SharesEditor rows={feeRows} setRows={setFeeRows} total={feeTotal} me={user!.id} canToggle title={`¿Cuánto pone cada uno cada ${freq}?`} />
+                <p className="text-xs text-muted">Cada {freq} se apunta la cuota sola y la confirmáis igual que lo demás.</p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {repeats && <p className="-mb-2 text-sm font-medium">Entrada <span className="font-normal text-muted">(opcional: si hubo un primer pago, como la entrada del coche)</span></p>}
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Precio total (€)" value={price} onChange={(e) => setPrice(e.target.value)} required
+          <Field label={repeats ? "Entrada (€)" : "Precio total (€)"} value={price} onChange={(e) => setPrice(e.target.value)} required={!repeats}
             inputMode="decimal" placeholder="0,00" />
-          <Field label="Fecha de compra" type="date" value={date} onChange={(e) => setDate(e.target.value)} required max={today()} />
+          <Field label={repeats ? "Fecha de la entrada" : "Fecha de compra"} type="date" value={date} onChange={(e) => setDate(e.target.value)} required max={today()} />
         </div>
 
+        {hasDown && <>
         <section>
           <div className="mb-2 flex items-baseline justify-between">
             <p className="text-sm font-medium text-muted">¿Cuánto puso cada uno?</p>
@@ -214,20 +291,21 @@ function AnadirBien() {
           </p>
         )}
         {!receipt && !existing.receipt && <p className="-mt-3 text-xs text-muted">El ticket es opcional, pero recomendable. Si no lo pones, saldrá como “sin ticket”.</p>}
+        </>}
 
-        {isPiso && (
+        {isPiso && (() => { const people = repeats ? feeCheck.involved.length : involved.length; return (
           <label className="flex items-start gap-3 rounded-2xl border border-line bg-card p-4">
-            <input type="checkbox" checked={isPrivate && involved.length >= 2} disabled={involved.length < 2}
+            <input type="checkbox" checked={isPrivate && people >= 2} disabled={people < 2}
               onChange={(e) => setIsPrivate(e.target.checked)}
               className="mt-0.5 h-5 w-5 accent-[var(--brand)]" />
             <span>
               <span className="block font-medium">Privado 🔒</span>
-              <span className="block text-sm text-muted">{involved.length < 2
+              <span className="block text-sm text-muted">{people < 2
                 ? "Necesita al menos 2 personas implicadas, para que alguien más lo confirme."
                 : "Solo lo verán las personas que participan."}</span>
             </span>
           </label>
-        )}
+        ); })()}
 
         <ErrorBox>{error}</ErrorBox>
         <div className="sticky bottom-0 -mx-4 bg-bg/95 px-4 py-3 backdrop-blur">
