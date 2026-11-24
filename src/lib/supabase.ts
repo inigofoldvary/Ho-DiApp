@@ -22,5 +22,6 @@ export function errorText(e: unknown): string {
   if (msg.includes("Invalid login credentials")) return "Correo o contraseña incorrectos.";
   if (msg.includes("User already registered")) return "Ya existe una cuenta con ese correo. Prueba a entrar.";
   if (msg.includes("Password should be at least")) return "La contraseña tiene que tener al menos 6 caracteres.";
+  if (msg.includes("provider is not enabled")) return "El acceso con Google aún no está activado. Usa correo y contraseña de momento.";
   return msg;
 }
