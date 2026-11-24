@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros, parseEuros } from "@/lib/money";
@@ -25,8 +25,14 @@ function centsToInput(c: number) {
   return (c / 100).toFixed(2).replace(".", ",").replace(",00", "");
 }
 
-export default function AnadirBien() {
+export default function AnadirBienPage() {
+  return <Suspense><AnadirBien /></Suspense>;
+}
+
+function AnadirBien() {
   const { id } = useParams<{ id: string }>();
+  const editId = useSearchParams().get("editar");
+  const [existing, setExisting] = useState<{ receipt: string | null; photo: string | null }>({ receipt: null, photo: null });
   const router = useRouter();
   const user = useRequireUser();
   const [kind, setKind] = useState<string>("");
@@ -49,9 +55,22 @@ export default function AnadirBien() {
         const members: Member[] = ((data ?? []) as unknown as { user_id: string; profiles: { display_name: string } | null }[])
           .map((m) => ({ user_id: m.user_id, name: m.profiles?.display_name ?? "?" }))
           .sort((a, b) => (a.user_id === user.id ? -1 : b.user_id === user.id ? 1 : a.name.localeCompare(b.name)));
-        setRows(members.map((m) => ({ ...m, involved: true, amount: "" })));
+        if (!editId) {
+          setRows(members.map((m) => ({ ...m, involved: true, amount: "" })));
+          return;
+        }
+        db.from("assets").select("name, total_cents, purchase_date, visibility, receipt_path, photo_path, asset_participants(user_id, amount_cents)")
+          .eq("id", editId).single().then(({ data: a, error }) => {
+            if (error || !a) { setError("No se pudo cargar el bien para editarlo"); setRows([]); return; }
+            setName(a.name); setPrice(centsToInput(a.total_cents)); setDate(a.purchase_date);
+            setIsPrivate(a.visibility === "implicados");
+            setExisting({ receipt: a.receipt_path, photo: a.photo_path });
+            const parts = new Map((a.asset_participants as { user_id: string; amount_cents: number }[]).map((p) => [p.user_id, p.amount_cents]));
+            setRows(members.map((m) => ({ ...m, involved: parts.has(m.user_id),
+              amount: parts.has(m.user_id) && parts.get(m.user_id)! > 0 ? centsToInput(parts.get(m.user_id)!) : "" })));
+          });
       });
-  }, [user, id]);
+  }, [user, id, editId]);
 
   const total = parseEuros(price);
   const involved = (rows ?? []).filter((r) => r.involved);
@@ -90,16 +109,19 @@ export default function AnadirBien() {
     setBusy(true); setError("");
     try {
       const [receiptPath, photoPath] = await Promise.all([
-        receipt ? uploadPhoto(id, receipt) : Promise.resolve(null),
-        photo ? uploadPhoto(id, photo) : Promise.resolve(null),
+        receipt ? uploadPhoto(id, receipt) : Promise.resolve(existing.receipt),
+        photo ? uploadPhoto(id, photo) : Promise.resolve(existing.photo),
       ]);
       const shares = involved.map((r) => ({ user_id: r.user_id, amount_cents: parseEuros(r.amount) ?? 0 }));
-      const { error } = await supabase().rpc("create_asset", {
-        p_household: id, p_name: name, p_total_cents: total, p_purchase_date: date, p_shares: shares,
+      const common = {
+        p_name: name, p_total_cents: total, p_purchase_date: date, p_shares: shares,
         p_visibility: isPrivate ? "implicados" : "hogar", p_receipt_path: receiptPath, p_photo_path: photoPath,
-      });
+      };
+      const { error } = editId
+        ? await supabase().rpc("update_asset", { p_asset: editId, ...common })
+        : await supabase().rpc("create_asset", { p_household: id, ...common });
       if (error) throw error;
-      router.replace(`/hogar/${id}`);
+      router.replace(editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`);
     } catch (err) {
       setError(errorText(err));
       setBusy(false);
@@ -111,7 +133,7 @@ export default function AnadirBien() {
 
   return (
     <main>
-      <Header title="Añadir bien" back={`/hogar/${id}`} />
+      <Header title={editId ? "Editar bien" : "Añadir bien"} back={editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`} />
       <form onSubmit={save} className="space-y-5">
         <Field label="¿Qué es?" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120}
           placeholder="Sofá, nevera, coche…" autoFocus />
@@ -158,10 +180,10 @@ export default function AnadirBien() {
         </section>
 
         <section className="grid grid-cols-2 gap-3">
-          <PhotoPicker label="Foto del ticket" file={receipt} onChange={setReceipt} />
-          <PhotoPicker label="Foto del objeto" file={photo} onChange={setPhoto} />
+          <PhotoPicker label={existing.receipt && !receipt ? "Ticket guardado ✓ (toca para cambiar)" : "Foto del ticket"} file={receipt} onChange={setReceipt} />
+          <PhotoPicker label={existing.photo && !photo ? "Foto guardada ✓ (toca para cambiar)" : "Foto del objeto"} file={photo} onChange={setPhoto} />
         </section>
-        {!receipt && <p className="-mt-3 text-xs text-muted">El ticket es opcional, pero recomendable. Si no lo pones, saldrá como “sin ticket”.</p>}
+        {!receipt && !existing.receipt && <p className="-mt-3 text-xs text-muted">El ticket es opcional, pero recomendable. Si no lo pones, saldrá como “sin ticket”.</p>}
 
         {isPiso && (
           <label className="flex items-start gap-3 rounded-2xl border border-line bg-card p-4">
@@ -176,7 +198,7 @@ export default function AnadirBien() {
 
         <ErrorBox>{error}</ErrorBox>
         <div className="sticky bottom-0 -mx-4 bg-bg/95 px-4 py-3 backdrop-blur">
-          <Button type="submit" disabled={!canSave}>{busy ? "Guardando…" : "Guardar"}</Button>
+          <Button type="submit" disabled={!canSave}>{busy ? "Guardando…" : editId ? "Guardar cambios" : "Guardar"}</Button>
         </div>
       </form>
     </main>

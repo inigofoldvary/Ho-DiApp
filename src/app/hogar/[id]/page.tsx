@@ -6,6 +6,7 @@ import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros } from "@/lib/money";
 import { signedUrls } from "@/lib/photos";
+import { STATUS } from "@/lib/status";
 import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
 type Asset = {
@@ -14,11 +15,6 @@ type Asset = {
   asset_participants: { user_id: string; amount_cents: number; profiles: { display_name: string } | null }[];
 };
 
-const STATUS: Record<string, { text: string; cls: string }> = {
-  pendiente: { text: "Pendiente de confirmar", cls: "bg-warn-bg text-warn" },
-  confirmado: { text: "Confirmado", cls: "bg-ok-bg text-ok" },
-  rechazado: { text: "No es así", cls: "bg-bad-bg text-bad" },
-};
 
 export default function Hogar() {
   const { id } = useParams<{ id: string }>();
@@ -27,12 +23,16 @@ export default function Hogar() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState("");
+  const [pending, setPending] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!user) return;
     const db = supabase();
     db.from("households").select("name, status").eq("id", id).single().then(({ data, error }) => (error ? setLoadError(errorText(error)) : setHome(data)));
     db.rpc("sync_installments", { p_household: id });
+    db.rpc("my_pending", { p_household: id }).then(({ data }) =>
+      setPending(new Set(((data ?? []) as { subject_type: string; subject_id: string }[])
+        .filter((r) => r.subject_type === "asset").map((r) => r.subject_id))));
     db.from("assets")
       .select("id, name, total_cents, status, receipt_path, photo_path, purchase_date, visibility, asset_participants(user_id, amount_cents, profiles(display_name))")
       .eq("household_id", id).order("purchase_date", { ascending: false })
@@ -57,6 +57,12 @@ export default function Hogar() {
         <p className="text-3xl font-bold tracking-tight">{formatEuros(total)}</p>
       </Card>
 
+      {pending.size > 0 && (
+        <p className="mb-4 rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
+          🔔 Tienes {pending.size} {pending.size === 1 ? "cosa" : "cosas"} por confirmar. Están marcadas abajo.
+        </p>
+      )}
+
       <div className="mb-6 grid grid-cols-2 gap-3">
         <Link href={`/hogar/${id}/anadir`}><Button>+ Añadir</Button></Link>
         <Button variant="secondary" disabled title="Próximamente">Reporte</Button>
@@ -72,7 +78,8 @@ export default function Hogar() {
               .map((p) => `${p.profiles?.display_name ?? "?"} ${formatEuros(p.amount_cents)}`).join(" · ");
             return (
               <li key={a.id}>
-                <Card className="flex gap-3">
+                <Link href={`/hogar/${id}/bien/${a.id}`} className="block">
+                <Card className={`flex gap-3 ${pending.has(a.id) ? "!border-warn" : ""}`}>
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-bg text-2xl">
                     {urls[a.photo_path ?? a.receipt_path ?? ""]
                       // eslint-disable-next-line @next/next/no-img-element
@@ -88,9 +95,11 @@ export default function Hogar() {
                     <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-medium">
                       <span className={`rounded-full px-2 py-0.5 ${st.cls}`}>{st.text}</span>
                       {!a.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin ticket</span>}
+                      {pending.has(a.id) && <span className="rounded-full bg-warn px-2 py-0.5 text-white">Te toca confirmar</span>}
                     </div>
                   </div>
                 </Card>
+                </Link>
               </li>
             );
           })}
