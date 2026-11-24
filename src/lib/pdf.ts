@@ -8,7 +8,13 @@ const fmtDateTime = (d: string) => new Date(d).toLocaleString("es-ES", { dateSty
 const fmtMonth = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("es-ES", { month: "long", year: "numeric" });
 const eur = (c: number) => formatEuros(c).replace(/ /g, " ");
 
-export function buildPdf(r: Report, opts: { final?: boolean; leaving?: { user_id: string; name: string } } = {}): jsPDF {
+export type SplitPdf = {
+  rows: { name: string; price: number; value: number; keeper: string }[];
+  transfers: { from: string; to: string; cents: number }[];
+  sale: { total: number; per: { name: string; cents: number }[] } | null;
+};
+
+export function buildPdf(r: Report, opts: { final?: boolean; leaving?: { user_id: string; name: string }; split?: SplitPdf } = {}): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const green: [number, number, number] = [47, 111, 94];
   let y = 18;
@@ -41,6 +47,38 @@ export function buildPdf(r: Report, opts: { final?: boolean; leaving?: { user_id
       .text(`Además hay ${eur(pendingTotal)} pendientes de confirmar, que no se incluyen en los totales.`, 14, y);
     doc.setTextColor(0);
     y += 6;
+  }
+
+  // 1a. Reparto acordado al disolver
+  if (opts.split) {
+    const sp = opts.split;
+    y += 4;
+    y = room(doc, y);
+    doc.setFont("helvetica", "bold").setFontSize(13).text("Reparto acordado", 14, y);
+    autoTable(doc, {
+      startY: y + 3,
+      head: [["Bien", "Costó", "Valor acordado", "Se lo queda"]],
+      body: sp.rows.map((x) => [x.name, eur(x.price), eur(x.value), x.keeper]),
+      headStyles: { fillColor: green },
+      columnStyles: { 1: { halign: "right" }, 2: { halign: "right", fontStyle: "bold" } },
+      styles: { fontSize: 9 }, margin: { bottom: 24 },
+    });
+    y = lastY(doc) + 6;
+    y = room(doc, y);
+    doc.setFont("helvetica", "bold").setFontSize(11).text("Pagos para quedar en paz", 14, y);
+    y += 6;
+    doc.setFont("helvetica", "normal").setFontSize(10);
+    if (sp.transfers.length === 0) { doc.text("Nadie tiene que pagar a nadie.", 14, y); y += 6; }
+    for (const t of sp.transfers) { doc.text(`${t.from} paga ${eur(t.cents)} a ${t.to}`, 14, y); y += 6; }
+    if (sp.sale) {
+      y += 2;
+      y = room(doc, y);
+      doc.setFont("helvetica", "bold").setFontSize(11).text(`Para vender (valor aproximado ${eur(sp.sale.total)})`, 14, y);
+      y += 6;
+      doc.setFont("helvetica", "normal").setFontSize(10);
+      for (const p of sp.sale.per) { doc.text(`${p.name}: ${eur(p.cents)} (según lo que puso en cada objeto)`, 14, y); y += 6; }
+    }
+    y += 4;
   }
 
   // 1b. Salida: lo que ha aportado quien se va
