@@ -5,10 +5,11 @@ import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros } from "@/lib/money";
+import { signedUrls } from "@/lib/photos";
 import { Button, Card, Header, Loading } from "@/components/ui";
 
 type Asset = {
-  id: string; name: string; total_cents: number; status: string; receipt_path: string | null;
+  id: string; name: string; total_cents: number; status: string; receipt_path: string | null; photo_path: string | null;
   purchase_date: string; visibility: string;
   asset_participants: { user_id: string; amount_cents: number; profiles: { display_name: string } | null }[];
 };
@@ -24,6 +25,7 @@ export default function Hogar() {
   const user = useRequireUser();
   const [home, setHome] = useState<{ name: string; status: string } | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [urls, setUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!user) return;
@@ -31,9 +33,13 @@ export default function Hogar() {
     db.from("households").select("name, status").eq("id", id).single().then(({ data }) => setHome(data));
     db.rpc("sync_installments", { p_household: id });
     db.from("assets")
-      .select("id, name, total_cents, status, receipt_path, purchase_date, visibility, asset_participants(user_id, amount_cents, profiles(display_name))")
+      .select("id, name, total_cents, status, receipt_path, photo_path, purchase_date, visibility, asset_participants(user_id, amount_cents, profiles(display_name))")
       .eq("household_id", id).order("purchase_date", { ascending: false })
-      .then(({ data }) => setAssets((data as unknown as Asset[]) ?? []));
+      .then(({ data }) => {
+        const list = (data as unknown as Asset[]) ?? [];
+        setAssets(list);
+        signedUrls(list.map((a) => a.photo_path ?? a.receipt_path ?? "")).then(setUrls);
+      });
   }, [user, id]);
 
   if (!home) return <Loading />;
@@ -50,7 +56,7 @@ export default function Hogar() {
       </Card>
 
       <div className="mb-6 grid grid-cols-2 gap-3">
-        <Button disabled title="Lo construimos en el siguiente paso">+ Añadir</Button>
+        <Link href={`/hogar/${id}/anadir`}><Button>+ Añadir</Button></Link>
         <Button variant="secondary" disabled title="Próximamente">Reporte</Button>
       </div>
 
@@ -65,7 +71,12 @@ export default function Hogar() {
             return (
               <li key={a.id}>
                 <Card className="flex gap-3">
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-bg text-2xl">📦</div>
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-bg text-2xl">
+                    {urls[a.photo_path ?? a.receipt_path ?? ""]
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={urls[a.photo_path ?? a.receipt_path ?? ""]} alt="" className="h-full w-full object-cover" />
+                      : "📦"}
+                  </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
                       <p className="truncate font-semibold">{a.name}{a.visibility === "implicados" ? " 🔒" : ""}</p>
