@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Inventario del hogar",
+  title: "Ho-DiApp",
   description: "Registra quién ha pagado cada cosa de tu casa compartida.",
 };
 

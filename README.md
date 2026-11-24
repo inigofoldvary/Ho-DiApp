@@ -1,4 +1,4 @@
-# Inventario del hogar (prototipo)
+# Ho-DiApp (prototipo)
 
 App web (pensada para el móvil) para apuntar quién ha pagado cada cosa de un hogar
 compartido, confirmado por los implicados.

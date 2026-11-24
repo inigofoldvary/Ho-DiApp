@@ -45,7 +45,7 @@ function EntrarForm() {
     <main className="pt-12">
       <div className="mb-8 text-center">
         <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand text-2xl text-brand-ink">⌂</div>
-        <h1 className="text-2xl font-bold">Inventario del hogar</h1>
+        <h1 className="text-2xl font-bold">Ho-DiApp</h1>
         <p className="mt-1 text-muted">Quién pagó qué en vuestra casa, claro y sin discusiones.</p>
       </div>
 
