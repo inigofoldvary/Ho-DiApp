@@ -2,9 +2,9 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
-import { Button, Card, Header, Loading } from "@/components/ui";
+import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
 type Member = { user_id: string; left_at: string | null; profiles: { display_name: string } | null };
 
@@ -15,15 +15,17 @@ function Invitar() {
   const [home, setHome] = useState<{ name: string; kind: string; invite_code: string } | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [copied, setCopied] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     if (!user) return;
     const db = supabase();
-    db.from("households").select("name, kind, invite_code").eq("id", id).single().then(({ data }) => setHome(data));
+    db.from("households").select("name, kind, invite_code").eq("id", id).single().then(({ data, error }) => (error ? setLoadError(errorText(error)) : setHome(data)));
     db.from("household_members").select("user_id, left_at, profiles(display_name)").eq("household_id", id)
       .is("left_at", null).then(({ data }) => setMembers((data as unknown as Member[]) ?? []));
   }, [user, id]);
 
+  if (loadError) return <main className="pt-10"><ErrorBox>No se pudo cargar el hogar: {loadError}</ErrorBox></main>;
   if (!home) return <Loading />;
   const link = `${location.origin}/unirse/${home.invite_code}`;
   const message = `Te invito a "${home.name}" para apuntar quién ha pagado cada cosa de casa: ${link}`;

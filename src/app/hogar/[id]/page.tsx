@@ -2,11 +2,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros } from "@/lib/money";
 import { signedUrls } from "@/lib/photos";
-import { Button, Card, Header, Loading } from "@/components/ui";
+import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
 type Asset = {
   id: string; name: string; total_cents: number; status: string; receipt_path: string | null; photo_path: string | null;
@@ -26,11 +26,12 @@ export default function Hogar() {
   const [home, setHome] = useState<{ name: string; status: string } | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [urls, setUrls] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     if (!user) return;
     const db = supabase();
-    db.from("households").select("name, status").eq("id", id).single().then(({ data }) => setHome(data));
+    db.from("households").select("name, status").eq("id", id).single().then(({ data, error }) => (error ? setLoadError(errorText(error)) : setHome(data)));
     db.rpc("sync_installments", { p_household: id });
     db.from("assets")
       .select("id, name, total_cents, status, receipt_path, photo_path, purchase_date, visibility, asset_participants(user_id, amount_cents, profiles(display_name))")
@@ -42,6 +43,7 @@ export default function Hogar() {
       });
   }, [user, id]);
 
+  if (loadError) return <main className="pt-10"><ErrorBox>No se pudo cargar el hogar: {loadError}</ErrorBox></main>;
   if (!home) return <Loading />;
   const total = assets.reduce((s, a) => s + a.total_cents, 0);
 

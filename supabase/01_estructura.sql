@@ -861,3 +861,9 @@ create policy "ver fotos que me tocan" on storage.objects for select to authenti
     or exists (select 1 from public.assets a
                 where (a.receipt_path = storage.objects.name or a.photo_path = storage.objects.name)
                   and public.can_see_asset(a.id))));
+
+-- Permiso de lectura de tablas (qué filas ve cada uno lo deciden las reglas RLS de arriba).
+grant usage on schema public to anon, authenticated;
+grant select on all tables in schema public to authenticated;
+grant update (display_name, avatar_url) on public.profiles to authenticated;
+alter default privileges in schema public grant select on tables to authenticated;
