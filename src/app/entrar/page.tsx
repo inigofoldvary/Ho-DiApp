@@ -44,8 +44,9 @@ function EntrarForm() {
   return (
     <main className="pt-12">
       <div className="mb-8 text-center">
-        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand text-2xl text-brand-ink">⌂</div>
-        <h1 className="text-2xl font-bold">Ho-DiApp</h1>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="" width={96} height={88} className="mx-auto mb-3 h-auto w-24" />
+        <h1 className="text-3xl font-bold tracking-tight"><span className="text-brand">Ho-</span><span className="text-accent">Di</span><span className="text-muted">App</span></h1>
         <p className="mt-1 text-muted">Quién pagó qué en vuestra casa, claro y sin discusiones.</p>
       </div>
 

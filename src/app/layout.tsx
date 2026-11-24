@@ -4,12 +4,14 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Ho-DiApp",
   description: "Registra quién ha pagado cada cosa de tu casa compartida.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "Ho-Di", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#2f6f5e",
+  themeColor: "#00807f",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
