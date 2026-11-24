@@ -116,9 +116,12 @@ function AnadirBien() {
 
   function equal() {
     if (total === null || !rows) return;
-    const parts = splitEqual(total, involved.length);
+    // Si solo hay una persona marcada (p. ej. después de "Lo pagué yo todo"), se reparte entre todos.
+    const all = involved.length <= 1;
+    const n = all ? rows.length : involved.length;
+    const parts = splitEqual(total, n);
     let k = 0;
-    setRows(rows.map((r) => (r.involved ? { ...r, amount: centsToInput(parts[k++]) } : r)));
+    setRows(rows.map((r) => (all || r.involved ? { ...r, involved: true, amount: centsToInput(parts[k++]) } : r)));
   }
 
   async function save(e: React.FormEvent) {
@@ -189,6 +192,7 @@ function AnadirBien() {
               </div>
             ))}
           </div>
+          {total === null && <p className="mt-1 text-xs text-muted">Pon primero el precio total para poder repartirlo.</p>}
           {isPiso && <p className="mt-1 text-xs text-muted">Marca solo a quienes participan en esta compra: ellos la confirman. Si participas tú solo, la confirmará el resto del piso.</p>}
           {status && (
             <p className={`mt-2 rounded-xl px-3 py-2 text-sm ${status.ok ? "bg-ok-bg text-ok" : "bg-warn-bg text-warn"}`}>

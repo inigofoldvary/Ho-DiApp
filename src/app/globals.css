@@ -7,7 +7,7 @@
   --muted: #6f6a63;
   --line: #e6e1da;
   --brand: #2f6f5e;
-  --logo: #2f6f5e; /* verde del logo: igual en claro y oscuro */
+  --logo: #2f6f5e; /* verde del logo: el mismo en toda la app */
   --accent: #a8834c;
   --brand-ink: #ffffff;
   --warn: #b26b00;
@@ -25,12 +25,12 @@
     --ink: #f1eee9;
     --muted: #a39d95;
     --line: #34312d;
-    --brand: #5fb49c;
+    --brand: #2f6f5e;
     --accent: #d4b07a;
-    --brand-ink: #0e1a16;
+    --brand-ink: #ffffff;
     --warn: #f0b35a;
     --warn-bg: #3a2c14;
-    --ok: #5fb49c;
+    --ok: #6fbfa6;
     --ok-bg: #18302a;
     --bad: #f2867c;
     --bad-bg: #3b1d1a;

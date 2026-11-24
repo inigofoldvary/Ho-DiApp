@@ -8,6 +8,7 @@ export function parseEuros(input: string): number | null {
   let s = input.trim().replace(/\s|€/g, "");
   if (!s) return null;
   if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ""); // "1.200" = mil doscientos
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   return Math.round(parseFloat(s) * 100);
 }
