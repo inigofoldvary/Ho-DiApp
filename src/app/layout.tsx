@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Ho-DiApp",
+  title: "Ho-DiApp · Home Divide",
   description: "Registra quién ha pagado cada cosa de tu casa compartida.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, title: "Ho-Di", statusBarStyle: "default" },

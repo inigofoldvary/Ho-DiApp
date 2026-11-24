@@ -47,6 +47,7 @@ function EntrarForm() {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo.png" alt="" width={96} height={88} className="mx-auto mb-3 h-auto w-24" />
         <h1 className="text-3xl font-bold tracking-tight"><span className="text-brand">Ho-</span><span className="text-accent">Di</span><span className="text-muted">App</span></h1>
+        <p className="text-sm font-medium uppercase tracking-widest text-brand">Home Divide</p>
         <p className="mt-1 text-muted">Quién pagó qué en vuestra casa, claro y sin discusiones.</p>
       </div>
 
