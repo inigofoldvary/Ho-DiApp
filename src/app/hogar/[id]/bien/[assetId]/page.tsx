@@ -24,6 +24,7 @@ export default function Bien() {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [confs, setConfs] = useState<Confirmation[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
+  const [active, setActive] = useState<string[]>([]);
   const [frozen, setFrozen] = useState(false);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState("");
@@ -38,7 +39,7 @@ export default function Bien() {
       db.from("assets").select("*, asset_participants(user_id, amount_cents, profiles(display_name))").eq("id", assetId).single(),
       db.from("confirmations").select("user_id, decision, comment, created_at, subject_version")
         .eq("subject_type", "asset").eq("subject_id", assetId).order("created_at"),
-      db.from("household_members").select("user_id, profiles(display_name)").eq("household_id", id),
+      db.from("household_members").select("user_id, left_at, profiles(display_name)").eq("household_id", id),
       db.from("households").select("status").eq("id", id).single(),
     ]);
     if (a.error) return setLoadError(a.error.code === "PGRST116" ? "Este bien no existe o no tienes acceso." : errorText(a.error));
@@ -46,8 +47,10 @@ export default function Bien() {
     setAsset(as);
     setConfs((c.data as Confirmation[]) ?? []);
     const n: Record<string, string> = {};
-    for (const r of (m.data ?? []) as unknown as { user_id: string; profiles: { display_name: string } | null }[]) n[r.user_id] = r.profiles?.display_name ?? "?";
+    const mem = (m.data ?? []) as unknown as { user_id: string; left_at: string | null; profiles: { display_name: string } | null }[];
+    for (const r of mem) n[r.user_id] = r.profiles?.display_name ?? "?";
     setNames(n);
+    setActive(mem.filter((r) => !r.left_at).map((r) => r.user_id));
     setFrozen(h.data?.status !== "activo");
     signedUrls([as.receipt_path ?? "", as.photo_path ?? ""]).then(setUrls);
   }, [assetId, id]);
@@ -81,7 +84,11 @@ export default function Bien() {
   const current = confs.filter((c) => c.subject_version === asset.version);
   const myAnswer = current.find((c) => c.user_id === user.id);
   const iParticipate = asset.asset_participants.some((p) => p.user_id === user.id);
-  const canAnswer = iParticipate && !myAnswer && !frozen;
+  // Si solo participa una persona, lo confirma todo el hogar (nadie se confirma a sí mismo).
+  const soloOne = asset.asset_participants.length === 1;
+  const confirmers = soloOne ? active : asset.asset_participants.map((p) => p.user_id);
+  const iConfirm = confirmers.includes(user.id);
+  const canAnswer = iConfirm && !myAnswer && !frozen;
   const isCreator = asset.created_by === user.id;
   const nameOf = (uid: string, fallback?: string | null) => (uid === user.id ? "Tú" : names[uid] ?? fallback ?? "?");
 
@@ -123,16 +130,40 @@ export default function Bien() {
                 <span className="font-medium">{nameOf(p.user_id, p.profiles?.display_name)}</span>
                 <span className="font-semibold">{formatEuros(p.amount_cents)}</span>
               </div>
+              {!soloOne && (<>
               <p className={`text-sm ${ans?.decision === "confirmar" ? "text-ok" : ans?.decision === "rechazar" ? "text-bad" : "text-muted"}`}>
                 {ans?.decision === "confirmar" ? `✓ Confirmado · ${formatDateTime(ans.created_at)}`
                   : ans?.decision === "rechazar" ? `✗ No es así · ${formatDateTime(ans.created_at)}`
                   : "⏳ Falta que confirme"}
               </p>
               {ans?.comment && <p className="mt-1 rounded-lg bg-bad-bg px-3 py-2 text-sm text-bad">“{ans.comment}”</p>}
+              </>)}
             </div>
           );
         })}
       </Card>
+
+      {soloOne && (
+        <>
+          <h2 className="mb-2 text-sm font-semibold text-muted">Lo tiene que confirmar todo el hogar</h2>
+          <Card className="mb-4 divide-y divide-line !p-0">
+            {confirmers.map((u) => {
+              const ans = current.find((c) => c.user_id === u);
+              return (
+                <div key={u} className="px-4 py-3">
+                  <span className="font-medium">{nameOf(u)}</span>
+                  <p className={`text-sm ${ans?.decision === "confirmar" ? "text-ok" : ans?.decision === "rechazar" ? "text-bad" : "text-muted"}`}>
+                    {ans?.decision === "confirmar" ? `✓ Confirmado · ${formatDateTime(ans.created_at)}`
+                      : ans?.decision === "rechazar" ? `✗ No es así · ${formatDateTime(ans.created_at)}`
+                      : "⏳ Falta que confirme"}
+                  </p>
+                  {ans?.comment && <p className="mt-1 rounded-lg bg-bad-bg px-3 py-2 text-sm text-bad">“{ans.comment}”</p>}
+                </div>
+              );
+            })}
+          </Card>
+        </>
+      )}
 
       {asset.status === "rechazado" && isCreator && !frozen && (
         <p className="mb-4 rounded-xl bg-warn-bg px-4 py-3 text-sm text-warn">
@@ -140,7 +171,7 @@ export default function Bien() {
         </p>
       )}
 
-      {!frozen && (isCreator || iParticipate) && (
+      {!frozen && (isCreator || iParticipate || iConfirm) && (
         <div className="mb-6 grid grid-cols-2 gap-3">
           <Link href={`/hogar/${id}/anadir?editar=${asset.id}`}><Button variant="secondary">Editar</Button></Link>
           {isCreator && asset.status !== "confirmado"

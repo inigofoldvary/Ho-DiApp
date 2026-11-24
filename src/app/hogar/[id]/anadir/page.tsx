@@ -115,7 +115,7 @@ function AnadirBien() {
       const shares = involved.map((r) => ({ user_id: r.user_id, amount_cents: parseEuros(r.amount) ?? 0 }));
       const common = {
         p_name: name, p_total_cents: total, p_purchase_date: date, p_shares: shares,
-        p_visibility: isPrivate ? "implicados" : "hogar", p_receipt_path: receiptPath, p_photo_path: photoPath,
+        p_visibility: isPrivate && involved.length >= 2 ? "implicados" : "hogar", p_receipt_path: receiptPath, p_photo_path: photoPath,
       };
       const { error } = editId
         ? await supabase().rpc("update_asset", { p_asset: editId, ...common })
@@ -171,7 +171,7 @@ function AnadirBien() {
               </div>
             ))}
           </div>
-          {isPiso && <p className="mt-1 text-xs text-muted">Marca solo a quienes participan en esta compra. Ellos son los que tendrán que confirmarla.</p>}
+          {isPiso && <p className="mt-1 text-xs text-muted">Marca solo a quienes participan en esta compra: ellos la confirman. Si participas tú solo, la confirmará el resto del piso.</p>}
           {status && (
             <p className={`mt-2 rounded-xl px-3 py-2 text-sm ${status.ok ? "bg-ok-bg text-ok" : "bg-warn-bg text-warn"}`}>
               {status.ok ? "✓ " : ""}{status.text}
@@ -187,11 +187,14 @@ function AnadirBien() {
 
         {isPiso && (
           <label className="flex items-start gap-3 rounded-2xl border border-line bg-card p-4">
-            <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)}
+            <input type="checkbox" checked={isPrivate && involved.length >= 2} disabled={involved.length < 2}
+              onChange={(e) => setIsPrivate(e.target.checked)}
               className="mt-0.5 h-5 w-5 accent-[var(--brand)]" />
             <span>
               <span className="block font-medium">Privado 🔒</span>
-              <span className="block text-sm text-muted">Solo lo verán las personas que participan.</span>
+              <span className="block text-sm text-muted">{involved.length < 2
+                ? "Necesita al menos 2 personas implicadas, para que alguien más lo confirme."
+                : "Solo lo verán las personas que participan."}</span>
             </span>
           </label>
         )}

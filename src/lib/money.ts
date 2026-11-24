@@ -1,6 +1,6 @@
 /** El dinero se guarda en céntimos. 1150,50 € = 115050. */
 export function formatEuros(cents: number): string {
-  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(cents / 100);
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR", useGrouping: "always" } as Intl.NumberFormatOptions).format(cents / 100);
 }
 
 /** Convierte lo que escribe la persona ("1.150,5" o "1150.50") a céntimos. Null si no es válido. */
