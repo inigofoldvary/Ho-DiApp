@@ -56,6 +56,11 @@ export default function Hogar() {
         <Link href={`/hogar/${id}/invitar`} className="rounded-full border border-line px-3 py-1 text-sm">+ Invitar</Link>} />
       <Link href="/" className="mb-3 block text-sm text-muted">‹ Tus hogares</Link>
       <h1 className="mb-3 text-2xl font-bold tracking-tight">{home.name}</h1>
+      {home.status !== "activo" && (
+        <Link href={`/hogar/${id}/disolver`} className="mb-4 block rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
+          {home.status === "disuelto" ? "📦 Este hogar está disuelto. Toca para descargar el PDF final." : "🧊 Disolución en marcha: el inventario está congelado. Toca para confirmar."}
+        </Link>
+      )}
 
       <Card className="mb-5 text-center">
         <p className="text-sm text-muted">Total registrado</p>
@@ -69,7 +74,9 @@ export default function Hogar() {
       )}
 
       <div className="mb-3 grid grid-cols-2 gap-3">
-        <Link href={`/hogar/${id}/anadir`}><Button>+ Añadir</Button></Link>
+        {home.status === "activo"
+          ? <Link href={`/hogar/${id}/anadir`}><Button>+ Añadir</Button></Link>
+          : <Button disabled>+ Añadir</Button>}
         <Link href={`/hogar/${id}/reporte`}><Button variant="secondary">Reporte</Button></Link>
       </div>
       <Link href={`/hogar/${id}/pagos`} className="mb-6 block">
@@ -114,6 +121,9 @@ export default function Hogar() {
             );
           })}
         </ul>
+      )}
+      {home.status === "activo" && (
+        <Link href={`/hogar/${id}/disolver`} className="mt-10 block text-center text-sm text-muted underline">Disolver este hogar</Link>
       )}
     </main>
   );
