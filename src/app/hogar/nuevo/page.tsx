@@ -5,15 +5,10 @@ import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { Button, ErrorBox, Field, Header, Loading } from "@/components/ui";
 
-const KINDS = [
-  { id: "pareja", emoji: "💑", title: "Pareja", text: "Dos personas que comparten casa." },
-  { id: "piso", emoji: "🏠", title: "Compañeros de piso", text: "Varias personas, pueden entrar y salir." },
-] as const;
-
 export default function NuevoHogar() {
   const user = useRequireUser();
   const router = useRouter();
-  const [kind, setKind] = useState<"pareja" | "piso" | null>(null);
+  const [people, setPeople] = useState<string[]>([""]);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,9 +22,10 @@ export default function NuevoHogar() {
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
-    if (!kind) return;
+    const names = people.map((p) => p.trim()).filter(Boolean);
+    if (new Set(names.map((n) => n.toLowerCase())).size !== names.length) return setError("Hay dos personas con el mismo nombre");
     setBusy(true); setError("");
-    const { data, error } = await supabase().rpc("create_household", { p_name: name, p_kind: kind });
+    const { data, error } = await supabase().rpc("create_home", { p_name: name, p_people: names });
     setBusy(false);
     if (error) return setError(errorText(error));
     router.replace(`/hogar/${data}/invitar?nuevo=1`);
@@ -48,25 +44,29 @@ export default function NuevoHogar() {
         </p>
       )}
       <form onSubmit={create} className="space-y-6">
-        <div>
-          <p className="mb-2 text-sm font-medium text-muted">¿Qué tipo de hogar es?</p>
-          <div className="grid gap-3">
-            {KINDS.map((k) => (
-              <button type="button" key={k.id} onClick={() => setKind(k.id)}
-                className={`flex items-center gap-4 rounded-2xl border-2 bg-card p-4 text-left transition ${kind === k.id ? "border-brand" : "border-line"}`}>
-                <span className="text-3xl">{k.emoji}</span>
-                <span>
-                  <span className="block font-semibold">{k.title}</span>
-                  <span className="block text-sm text-muted">{k.text}</span>
-                </span>
-              </button>
+        <Field label="Nombre del hogar" value={name} onChange={(e) => setName(e.target.value)} required autoFocus
+          maxLength={80} placeholder="Ej. Piso de Malasaña, Casa de los abuelos…" />
+        <section>
+          <p className="mb-1 text-sm font-medium text-muted">¿Quién más forma parte?</p>
+          <p className="mb-2 text-xs text-muted">Pon su nombre. No hace falta que tengan cuenta: cuando entren con el enlace, elegirán quién son. Puedes añadir a más gente después.</p>
+          <div className="space-y-2">
+            <p className="rounded-xl border border-line bg-card px-4 py-3 text-muted">Tú</p>
+            {people.map((p, i) => (
+              <div key={i} className="flex gap-2">
+                <input value={p} onChange={(e) => setPeople((ps) => ps.map((x, j) => (j === i ? e.target.value : x)))} maxLength={60}
+                  placeholder={i === 0 ? "Ej. Pepe" : "Otro nombre"} aria-label={`Persona ${i + 2}`}
+                  className="min-w-0 flex-1 rounded-xl border border-line bg-card px-4 py-3 outline-none focus:border-brand" />
+                {people.length > 1 && (
+                  <button type="button" onClick={() => setPeople((ps) => ps.filter((_, j) => j !== i))} aria-label="Quitar"
+                    className="rounded-xl border border-line px-3 text-muted">✕</button>
+                )}
+              </div>
             ))}
           </div>
-        </div>
-        <Field label="Nombre del hogar" value={name} onChange={(e) => setName(e.target.value)} required
-          maxLength={80} placeholder="Ej. Piso de Malasaña" />
+          <button type="button" onClick={() => setPeople((ps) => [...ps, ""])} className="mt-2 text-sm font-medium text-brand">+ Añadir otra persona</button>
+        </section>
         <ErrorBox>{error}</ErrorBox>
-        <Button type="submit" disabled={!kind || !name.trim() || busy}>{busy ? "Creando…" : "Crear hogar"}</Button>
+        <Button type="submit" disabled={!name.trim() || busy}>{busy ? "Creando…" : "Crear hogar"}</Button>
       </form>
     </main>
   );

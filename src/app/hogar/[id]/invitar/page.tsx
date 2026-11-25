@@ -6,7 +6,7 @@ import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
-type Member = { user_id: string; left_at: string | null; profiles: { display_name: string } | null };
+type Member = { user_id: string; left_at: string | null; profiles: { display_name: string; placeholder?: boolean } | null };
 
 function Invitar() {
   const { id } = useParams<{ id: string }>();
@@ -16,14 +16,28 @@ function Invitar() {
   const [members, setMembers] = useState<Member[]>([]);
   const [copied, setCopied] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [newName, setNewName] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!user) return;
     const db = supabase();
     db.from("households").select("name, kind, invite_code").eq("id", id).single().then(({ data, error }) => (error ? setLoadError(errorText(error)) : setHome(data)));
-    db.from("household_members").select("user_id, left_at, profiles(display_name)").eq("household_id", id)
+    db.from("household_members").select("user_id, left_at, profiles(*)").eq("household_id", id)
       .is("left_at", null).then(({ data }) => setMembers((data as unknown as Member[]) ?? []));
-  }, [user, id]);
+  }, [user, id, tick]);
+
+  async function addPerson(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    setBusy(true); setError("");
+    const { error } = await supabase().rpc("add_person", { p_household: id, p_name: newName });
+    setBusy(false);
+    if (error) return setError(errorText(error));
+    setNewName(""); setTick((t) => t + 1);
+  }
 
   if (loadError) return <main className="pt-10"><ErrorBox>No se pudo cargar el hogar: {loadError}</ErrorBox></main>;
   if (!home) return <Loading />;
@@ -39,7 +53,7 @@ function Invitar() {
   return (
     <main>
       <Header title="Invitar" back={`/hogar/${id}`} />
-      {isNew && <p className="mb-4 rounded-xl bg-ok-bg px-4 py-3 text-sm text-ok">¡Hogar creado! Ahora invita a {home.kind === "pareja" ? "tu pareja" : "tus compañeros"}.</p>}
+      {isNew && <p className="mb-4 rounded-xl bg-ok-bg px-4 py-3 text-sm text-ok">¡Hogar creado! Ya puedes apuntar cosas. Manda el enlace a los demás: al entrar elegirán quiénes son.</p>}
       <Card className="space-y-4">
         <div>
           <p className="text-sm text-muted">Enlace de invitación a</p>
@@ -52,14 +66,23 @@ function Invitar() {
         <Button type="button" variant="secondary" onClick={copy}>{copied ? "¡Copiado!" : "Copiar enlace"}</Button>
       </Card>
 
-      <h2 className="mb-2 mt-6 text-sm font-semibold text-muted">Ya están dentro ({members.length})</h2>
+      <h2 className="mb-2 mt-6 text-sm font-semibold text-muted">Personas del hogar ({members.length})</h2>
       <Card className="divide-y divide-line !p-0">
         {members.map((m) => (
-          <p key={m.user_id} className="px-4 py-3">
-            {m.profiles?.display_name ?? "—"}{m.user_id === user?.id ? " (tú)" : ""}
+          <p key={m.user_id} className="flex items-center justify-between gap-2 px-4 py-3">
+            <span>{m.profiles?.display_name ?? "—"}{m.user_id === user?.id ? " (tú)" : ""}</span>
+            {m.profiles?.placeholder && <span className="rounded-full bg-line px-2 py-0.5 text-xs text-muted">Aún no ha entrado</span>}
           </p>
         ))}
       </Card>
+      {home.kind !== "pareja" && (
+        <form onSubmit={addPerson} className="mt-3 flex gap-2">
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={60} placeholder="Añadir a alguien por su nombre"
+            className="min-w-0 flex-1 rounded-xl border border-line bg-card px-4 py-3 outline-none focus:border-brand" />
+          <button type="submit" disabled={busy || !newName.trim()} className="rounded-xl bg-brand px-4 font-semibold text-brand-ink disabled:opacity-40">Añadir</button>
+        </form>
+      )}
+      <ErrorBox>{error}</ErrorBox>
 
       <Link href={`/hogar/${id}`} className="mt-6 block"><Button variant="ghost">Ir al hogar →</Button></Link>
     </main>

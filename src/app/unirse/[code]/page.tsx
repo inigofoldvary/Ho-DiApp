@@ -14,16 +14,23 @@ export default function Unirse() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [people, setPeople] = useState<{ person_id: string; name: string }[]>([]);
+  const [who, setWho] = useState<string>("");
 
   useEffect(() => {
     const db = supabase();
-    db.auth.getUser().then(({ data }) => setLoggedIn(!!data.user));
+    db.auth.getUser().then(({ data }) => {
+      setLoggedIn(!!data.user);
+      if (data.user) db.rpc("invite_people", { p_code: code }).then(({ data: ps }) => setPeople((ps as { person_id: string; name: string }[]) ?? []));
+    });
     db.rpc("invite_preview", { p_code: code }).then(({ data }) => setPreview((data as Preview[])?.[0] ?? null));
   }, [code]);
 
   async function join() {
     setBusy(true); setError("");
-    const { data, error } = await supabase().rpc("join_household", { p_code: code });
+    const { data, error } = who && who !== "nuevo"
+      ? await supabase().rpc("claim_person", { p_code: code, p_person: who })
+      : await supabase().rpc("join_household", { p_code: code });
     setBusy(false);
     if (error) return setError(errorText(error));
     router.replace(`/hogar/${data}`);
@@ -41,7 +48,7 @@ export default function Unirse() {
   return (
     <main className="pt-12">
       <Card className="space-y-4 text-center">
-        <p className="text-4xl">{preview.kind === "pareja" ? "💑" : "🏠"}</p>
+        <p className="text-4xl">🏠</p>
         <div>
           <p className="text-sm text-muted">Te han invitado a</p>
           <p className="text-xl font-bold">{preview.name}</p>
@@ -49,8 +56,20 @@ export default function Unirse() {
         </div>
         <p className="text-sm text-muted">Aquí apuntáis quién ha pagado cada cosa de casa, y lo confirmáis entre todos.</p>
         <ErrorBox>{error}</ErrorBox>
+        {loggedIn && people.length > 0 && (
+          <div className="space-y-2 text-left">
+            <p className="text-sm font-semibold">¿Quién eres?</p>
+            {[...people, { person_id: "nuevo", name: "No estoy en la lista" }].map((p) => (
+              <label key={p.person_id} className={`flex items-center gap-3 rounded-xl border-2 px-4 py-3 ${who === p.person_id ? "border-brand bg-ok-bg" : "border-line"}`}>
+                <input type="radio" name="quien" checked={who === p.person_id} onChange={() => setWho(p.person_id)} className="h-5 w-5 accent-[var(--brand)]" />
+                <span className="font-medium">{p.person_id === "nuevo" ? <span className="text-muted">{p.name}</span> : p.name}</span>
+              </label>
+            ))}
+            <p className="text-xs text-muted">Si eliges tu nombre, todo lo apuntado a ese nombre pasa a tu cuenta, y ya puedes confirmarlo.</p>
+          </div>
+        )}
         {loggedIn ? (
-          <Button onClick={join} disabled={busy}>{busy ? "Entrando…" : "Unirme"}</Button>
+          <Button onClick={join} disabled={busy || (people.length > 0 && !who)}>{busy ? "Entrando…" : who && who !== "nuevo" ? `Entrar como ${people.find((p) => p.person_id === who)?.name}` : "Unirme"}</Button>
         ) : (
           <Link href={`/entrar?next=${encodeURIComponent(`/unirse/${code}`)}`} className="block">
             <Button>Crear cuenta y unirme</Button>

@@ -120,7 +120,7 @@ export default function Hogar() {
   return (
     <main>
       <AppBar right={canEdit ? (
-        <Link href={`/hogar/${id}/invitar`} className="rounded-full border border-line px-3 py-1 text-sm">+ Invitar</Link>) : undefined} />
+        <Link href={`/hogar/${id}/invitar`} className="rounded-full border border-line px-3 py-1 text-sm">+ Personas</Link>) : undefined} />
       <Link href="/" className="mb-3 block text-sm text-muted">‹ Tus hogares</Link>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h1 className="min-w-0 truncate text-2xl font-bold tracking-tight">{home.name}</h1>
@@ -150,6 +150,7 @@ export default function Hogar() {
               className="flex shrink-0 items-center gap-2 rounded-full border border-line bg-card py-1 pl-1 pr-3 text-sm font-medium">
               <span className="flex h-7 w-7 items-center justify-center rounded-full bg-logo text-xs font-bold text-white">{m.name.slice(0, 1).toUpperCase()}</span>
               {m.user_id === user?.id ? "Tú" : m.name}
+              {m.placeholder && <span className="text-xs font-normal text-muted">· sin entrar</span>}
             </Link>
           ))}
         </div>
