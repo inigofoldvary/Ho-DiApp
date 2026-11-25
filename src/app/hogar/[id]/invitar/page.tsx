@@ -20,6 +20,15 @@ function Invitar() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  async function remove(u: string) {
+    setBusy(true); setError("");
+    const { error } = await supabase().rpc("remove_person", { p_household: id, p_user: u });
+    setBusy(false); setRemoving(null);
+    if (error) return setError(errorText(error));
+    setTick((t) => t + 1);
+  }
 
   useEffect(() => {
     if (!user) return;
@@ -71,7 +80,17 @@ function Invitar() {
         {members.map((m) => (
           <p key={m.user_id} className="flex items-center justify-between gap-2 px-4 py-3">
             <span>{m.profiles?.display_name ?? "—"}{m.user_id === user?.id ? " (tú)" : ""}</span>
-            {m.profiles?.placeholder && <span className="rounded-full bg-line px-2 py-0.5 text-xs text-muted">Aún no ha entrado</span>}
+            <span className="flex items-center gap-2">
+              {m.profiles?.placeholder && <span className="rounded-full bg-line px-2 py-0.5 text-xs text-muted">Aún no ha entrado</span>}
+              {m.user_id !== user?.id && (removing === m.user_id ? (
+                <>
+                  <button type="button" onClick={() => setRemoving(null)} className="text-xs text-muted">No</button>
+                  <button type="button" disabled={busy} onClick={() => remove(m.user_id)} className="rounded-full bg-bad px-2 py-0.5 text-xs font-semibold text-white">Sí, quitar</button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setRemoving(m.user_id)} className="text-xs font-medium text-bad">Quitar</button>
+              ))}
+            </span>
           </p>
         ))}
       </Card>
@@ -83,6 +102,7 @@ function Invitar() {
         </form>
       )}
       <ErrorBox>{error}</ErrorBox>
+      <p className="mt-2 text-xs text-muted">Solo se puede quitar a alguien si no tiene dinero puesto en nada. Si sí tiene, usad "Alguien se va" para repartir.</p>
 
       <Link href={`/hogar/${id}`} className="mt-6 block"><Button variant="ghost">Ir al hogar →</Button></Link>
     </main>
