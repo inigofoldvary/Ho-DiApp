@@ -13,7 +13,7 @@ import { AppBar, Button, Card, ErrorBox, Loading } from "@/components/ui";
 
 type Asset = {
   id: string; name: string; total_cents: number; status: string; receipt_path: string | null; photo_path: string | null;
-  purchase_date: string; visibility: string; created_at: string; gone_reason?: string | null; gone_to?: string | null;
+  purchase_date: string; visibility: string; created_at: string; gone_reason?: string | null; gone_to?: string | null; category?: string | null;
   asset_participants: { user_id: string; amount_cents: number; profiles: { display_name: string } | null }[];
 };
 type Plan = {
@@ -160,10 +160,10 @@ export default function Hogar() {
         <p className="text-3xl font-bold tracking-tight">{formatEuros(total)}</p>
       </Card>
 
-      {pending.size > 0 && (
-        <p className="mb-4 rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
-          🔔 Tienes {pending.size} {pending.size === 1 ? "cosa" : "cosas"} por confirmar. Están marcadas abajo.
-        </p>
+      {pending.size + pendingPlans.size > 0 && (
+        <Link href={`/hogar/${id}/pendientes`} className="mb-4 block rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
+          🔔 Tienes {pending.size + pendingPlans.size} {pending.size + pendingPlans.size === 1 ? "cosa" : "cosas"} por confirmar. Toca para verlas ›
+        </Link>
       )}
 
       {[...months.entries()].sort().map(([period, items]) => (
@@ -221,6 +221,7 @@ export default function Hogar() {
                     <p className="truncate text-sm text-muted">{payers}</p>
                     <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-medium">
                       <span className={`rounded-full px-2 py-0.5 ${st.cls}`}>{st.text}</span>
+                      {a.category && <span className="rounded-full bg-line px-2 py-0.5 text-muted">{a.category}</span>}
                       {a.gone_reason && (
                         <span className="rounded-full bg-line px-2 py-0.5 text-muted">
                           {a.gone_reason === "vendido" ? "Para vender" : a.gone_reason === "llevado" ? `Se lo llevó ${nameOf(a.gone_to)}` : `Ahora es de ${nameOf(a.gone_to)}`}

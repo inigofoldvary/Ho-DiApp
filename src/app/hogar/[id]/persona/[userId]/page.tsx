@@ -85,10 +85,10 @@ export default function Persona() {
     <main className="pb-10">
       <Header title={name} back={`/hogar/${id}`} />
       <Card className="mb-5 text-center">
-        <p className="text-sm text-muted">Lo que le corresponde (según lo que costó)</p>
+        <p className="text-sm text-muted">{userId === user.id ? "Lo que te corresponde" : "Lo que le corresponde"} (según lo que costó)</p>
         <p className="text-3xl font-bold tracking-tight">{formatEuros(total)}</p>
       </Card>
-      {rows.length === 0 && <p className="py-10 text-center text-muted">Todavía no tiene nada a su nombre.</p>}
+      {rows.length === 0 && <p className="py-10 text-center text-muted">{userId === user.id ? "Todavía no tienes nada a tu nombre." : "Todavía no tiene nada a su nombre."}</p>}
       {full.length > 0 && (<>
         <h2 className="mb-2 text-sm font-semibold text-muted">{userId === user.id ? "Tuyo" : "Suyo"} al 100 % ({full.length})</h2>
         <Card className="mb-5 divide-y divide-line !p-0">{full.map((r) => <Item key={r.a.id} r={r} />)}</Card>

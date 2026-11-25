@@ -9,6 +9,7 @@ import { uploadPhoto } from "@/lib/photos";
 import { Button, ErrorBox, Field, Loading } from "@/components/ui";
 import { SharesEditor, sharesCheck, type ShareRow } from "@/components/SharesEditor";
 import { FREQS, type Frequency } from "@/lib/frequency";
+import { CATEGORIES } from "@/lib/categories";
 
 type Member = { user_id: string; name: string };
 type Row = { user_id: string; name: string; involved: boolean; amount: string };
@@ -44,6 +45,8 @@ function AnadirBien() {
   const [price, setPrice] = useState("");
   const [date, setDate] = useState(today());
   const [isPrivate, setIsPrivate] = useState(false);
+  const [category, setCategory] = useState("");
+  const [viewers, setViewers] = useState<Set<string>>(new Set());
   const [receipt, setReceipt] = useState<File | null>(null);
   const [photo, setPhoto] = useState<File | null>(null);
   const [error, setError] = useState("");
@@ -89,11 +92,14 @@ function AnadirBien() {
           setFeeRows(members.map((m) => ({ ...m, involved: false, amount: "" })));
           return;
         }
-        db.from("assets").select("name, total_cents, purchase_date, visibility, receipt_path, photo_path, asset_participants(user_id, amount_cents)")
+        db.from("assets").select("*, asset_participants(user_id, amount_cents)")
           .eq("id", editId).single().then(({ data: a, error }) => {
             if (error || !a) { setError("No se pudo cargar el bien para editarlo"); setRows([]); return; }
             setName(a.name); setPrice(centsToInput(a.total_cents)); setDate(a.purchase_date);
             setIsPrivate(a.visibility === "implicados");
+            setCategory(a.category ?? "");
+            db.from("asset_viewers").select("user_id").eq("asset_id", editId)
+              .then(({ data: v }) => setViewers(new Set(((v ?? []) as { user_id: string }[]).map((x) => x.user_id))));
             setExisting({ receipt: a.receipt_path, photo: a.photo_path });
             const parts = new Map((a.asset_participants as { user_id: string; amount_cents: number }[]).map((p) => [p.user_id, p.amount_cents]));
             setRows(members.map((m) => ({ ...m, involved: parts.has(m.user_id),
@@ -157,6 +163,7 @@ function AnadirBien() {
       const common = {
         p_name: name, p_total_cents: total, p_purchase_date: date, p_shares: shares,
         p_visibility: isPrivate && involved.length >= 2 ? "implicados" : "hogar", p_receipt_path: receiptPath, p_photo_path: photoPath,
+        p_category: category || null,
       };
       let assetId: string | null = null;
       if (hasDown) {
@@ -165,6 +172,9 @@ function AnadirBien() {
           : await supabase().rpc("create_asset", { p_household: id, ...common });
         if (error) throw error;
         assetId = editId ?? (data as string);
+        if (isPrivate && involved.length >= 2) {
+          await supabase().rpc("set_asset_viewers", { p_asset: assetId, p_users: [...viewers].filter((u) => !involved.some((r) => r.user_id === u)) });
+        }
       }
       if (repeats && !editId) {
         const { error } = await supabase().rpc("create_recurring_plan", {
@@ -191,6 +201,14 @@ function AnadirBien() {
       <form onSubmit={save} className="space-y-5">
         <Field label="¿Qué es?" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120}
           placeholder="Sofá, nevera, coche, alquiler…" autoFocus />
+        <label className="-mt-2 block">
+          <span className="mb-1 block text-sm font-medium text-muted">Tipo</span>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}
+            className="w-full rounded-xl border border-line bg-card px-4 py-3 outline-none focus:border-brand">
+            <option value="">Sin tipo</option>
+            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
 
         {!editId && (
           <section className="rounded-2xl border border-line bg-card p-4">
@@ -302,10 +320,27 @@ function AnadirBien() {
               <span className="block font-medium">Privado 🔒</span>
               <span className="block text-sm text-muted">{people < 2
                 ? "Necesita al menos 2 personas implicadas, para que alguien más lo confirme."
-                : "Solo lo verán las personas que participan."}</span>
+                : "Lo verán quienes pusieron dinero y las personas que marques aquí debajo."}</span>
             </span>
           </label>
         ); })()}
+        {isPiso && isPrivate && involved.length >= 2 && !repeats && (
+          <section className="-mt-2 rounded-2xl border border-line bg-card p-4">
+            <p className="mb-2 text-sm font-medium">¿Quién más lo puede ver?</p>
+            <div className="space-y-2">
+              {rows.map((r) => {
+                const paid = involved.some((x) => x.user_id === r.user_id);
+                return (
+                  <label key={r.user_id} className={`flex items-center gap-3 ${paid ? "opacity-60" : ""}`}>
+                    <input type="checkbox" disabled={paid} checked={paid || viewers.has(r.user_id)} className="h-5 w-5 accent-[var(--brand)]"
+                      onChange={(e) => setViewers((v) => { const n = new Set(v); if (e.target.checked) n.add(r.user_id); else n.delete(r.user_id); return n; })} />
+                    <span>{r.name}{r.user_id === user?.id ? " (tú)" : ""}{paid ? " · puso dinero" : ""}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <ErrorBox>{error}</ErrorBox>
         <div className="sticky bottom-0 -mx-4 bg-bg/95 px-4 py-3 backdrop-blur">

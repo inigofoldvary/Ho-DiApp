@@ -119,7 +119,7 @@ export default function Disolver() {
 
       {(inProgress || closed) && diss && (
         <>
-          {isExit && split && <p className="mb-3 text-sm text-muted">Se {split.leavers.length > 1 ? "van" : "va"} <b className="text-ink">{leaverNames(split.leavers)}</b>. El resto sigue en el piso.</p>}
+          {isExit && split && <p className="mb-3 text-sm text-muted">{split.leavers.includes(user.id) ? (split.leavers.length > 1 ? <>Os vais <b className="text-ink">{leaverNames(split.leavers.filter((u) => u !== user.id))} y tú</b>.</> : <>Te vas <b className="text-ink">tú</b>.</>) : <>Se {split.leavers.length > 1 ? "van" : "va"} <b className="text-ink">{leaverNames(split.leavers)}</b>.</>} El resto sigue en la casa.</p>}
           <ol className="mb-4 grid grid-cols-4 gap-1.5 text-center text-xs font-semibold">
             {PHASES.map((p, i) => {
               const idx = PHASES.findIndex((x) => x.id === phase);
@@ -171,7 +171,7 @@ export default function Disolver() {
                 <li>El inventario se <b>congela</b> mientras dura el reparto.</li>
                 <li><b>Valores:</b> os ponéis todos de acuerdo en cuánto vale hoy cada cosa.</li>
                 <li><b>Elegir:</b> cada uno marca, por separado, lo que quiere.</li>
-                <li><b>Acuerdo:</b> la app propone dos repartos. Cada cosa va a alguien, se vende{allLeave ? "" : " o se queda en el piso"}. Uno lo envía y los demás lo aprueban o lo devuelven con cambios.</li>
+                <li><b>Acuerdo:</b> la app propone dos repartos. Cada cosa va a alguien, se vende o se queda en la casa. Uno lo envía y los demás lo aprueban o lo devuelven con cambios.</li>
                 {!allLeave && <li>Lo que <b>se queda en el piso</b>, los que siguen se lo pagan a quien se va, según lo que puso.</li>}
                 <li>Cuando todos aprobáis, sale el <b>PDF</b>: quién se queda qué y quién paga a quién.</li>
               </ol>
@@ -218,7 +218,7 @@ export default function Disolver() {
       {inProgress && diss && split && (
         <div className="space-y-4">
           {rejection && (
-            <p className="rounded-xl bg-bad-bg px-4 py-3 text-sm text-bad">{nameOf(rejection.user_id)} dice que falta algo: “{rejection.comment}”</p>
+            <p className="rounded-xl bg-bad-bg px-4 py-3 text-sm text-bad">{rejection.user_id === user.id ? "Has dicho" : `${nameOf(rejection.user_id)} dice`} que falta algo: “{rejection.comment}”</p>
           )}
           {phase === "valores" && <PhaseValues split={split} people={people} me={user.id} nameOf={nameOf} urls={urls} busy={busy} call={call} />}
           {phase === "elegir" && <PhasePick split={split} people={people} me={user.id} nameOf={nameOf} urls={urls} busy={busy} call={call} />}
@@ -406,7 +406,7 @@ type Opt = "a" | "b";
 const OPT_LABEL: Record<Opt, string> = { a: "Opción A", b: "Opción B" };
 
 function keeperLabel(v: string | undefined, nameOf: (u: string) => string) {
-  return !v || v === "vender" ? "Vender" : v === "piso" ? "Se queda en el piso" : nameOf(v);
+  return !v || v === "vender" ? "Vender" : v === "piso" ? "Se queda en la casa" : nameOf(v);
 }
 
 function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
@@ -441,7 +441,7 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
 
   function cycle(itemId: string) {
     if (!canEdit) return;
-    const order = [...people, ...(stayers.length ? ["piso"] : []), "vender"];
+    const order = [...people, "piso", "vender"];
     const now = cur[tab][itemId] ?? nobody;
     setDraft((d) => ({ ...d, [tab]: { ...cur[tab], [itemId]: order[(order.indexOf(now) + 1) % order.length] } }));
   }
@@ -521,6 +521,41 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
       </div>
 
       <SplitSummary items={split.items} assign={cur[tab]} people={people} stayers={stayers} nameOf={nameOf} me={me} />
+
+      <Card className="overflow-x-auto !p-3">
+        <p className="mb-2 font-semibold">Mapa: quién quiere qué ({OPT_LABEL[tab]})</p>
+        <table className="w-full text-center text-xs">
+          <thead>
+            <tr className="text-muted">
+              <th className="py-1 text-left font-medium">Objeto</th>
+              {people.map((u) => <th key={u} className="px-1 py-1 font-medium">{nameOf(u)}</th>)}
+              <th className="px-1 py-1 font-medium">Casa</th><th className="px-1 py-1 font-medium">Vender</th>
+            </tr>
+          </thead>
+          <tbody>
+            {split.items.map((it) => {
+              const k = cur[tab][it.id] ?? nobody;
+              return (
+                <tr key={it.id} className="border-t border-line">
+                  <td className="max-w-[7rem] truncate py-1.5 text-left font-medium">{it.name}</td>
+                  {people.map((u) => {
+                    const w = split.wants[u]?.includes(it.id);
+                    const pct = Math.round(shareOf(it, u, people) * 100);
+                    return (
+                      <td key={u} className={`px-1 ${k === u ? "bg-ok-bg font-bold text-ok" : ""}`}>
+                        {k === u ? "✓" : w ? "✋" : "·"}<span className="block text-[10px] font-normal text-muted">{pct} %</span>
+                      </td>
+                    );
+                  })}
+                  <td className={k === "piso" ? "bg-ok-bg font-bold text-ok" : "text-muted"}>{k === "piso" ? "✓" : "·"}</td>
+                  <td className={k === "vender" ? "bg-line font-bold" : "text-muted"}>{k === "vender" ? "✓" : "·"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="mt-2 text-xs text-muted">✓ = se lo queda en esta opción · ✋ = lo pidió · % = lo que puso cada uno.</p>
+      </Card>
 
       <div className="space-y-2">
         <p className="font-semibold">Objeto a objeto</p>
@@ -607,16 +642,27 @@ function SplitSummary({ items, assign, people, stayers, nameOf, me }:
         {rows.map((r) => {
           const things = [...r.mine.map((it) => it.name), ...r.fromHome.map((x) => `su parte de ${x.it.name}`)];
           return (
+            r.user === me ? (
+              <p key={r.user} className="rounded-xl bg-ok-bg/60 px-3 py-2">
+                <b>Tú</b>{" "}
+                {things.length ? <>te quedas {list(things.map((t) => t.replace(/^su parte/, "tu parte")))} (<b>{formatEuros(r.gets)}</b>).</> : <>no te quedas nada.</>}{" "}
+                <span className="text-muted">Por lo que pusiste, te corresponden {formatEuros(r.due)} de lo que se reparte.</span>{" "}
+                {r.balance >= 100 ? <b>Pagas {formatEuros(r.balance)}.</b> : r.balance <= -100 ? <b>Cobras {formatEuros(-r.balance)}.</b> : <b>Quedas en paz.</b>}
+              </p>
+            ) : (
             <p key={r.user}>
               <b>{nameOf(r.user)}</b>{" "}
               {things.length ? <>se queda {list(things)} (<b>{formatEuros(r.gets)}</b>).</> : <>no se queda nada.</>}{" "}
               <span className="text-muted">Por lo que puso, le corresponden {formatEuros(r.due)} de lo que se reparte.</span>{" "}
               {r.balance >= 100 ? <b>Paga {formatEuros(r.balance)}.</b> : r.balance <= -100 ? <b>Cobra {formatEuros(-r.balance)}.</b> : <b>Queda en paz.</b>}
             </p>
+            )
           );
         })}
         {home.length > 0 && (
-          <p><b>Se queda en el piso:</b> {list(home.map((it) => it.name))} ({formatEuros(home.reduce((s, it) => s + it.value_cents, 0))}). Lo pagan {list(stayers.map(nameOf))}, cada uno según lo que puso, y así quien se va recibe su parte.</p>
+          stayers.length
+            ? <p><b>Se queda en la casa:</b> {list(home.map((it) => it.name))} ({formatEuros(home.reduce((s, it) => s + it.value_cents, 0))}). Lo pagan {list(stayers.map(nameOf))}, cada uno según lo que puso, y así quien se va recibe su parte.</p>
+            : <p><b>Se queda en la casa, como está:</b> {list(home.map((it) => it.name))}. Sigue siendo de quien lo pagó, con los mismos %. No se mueve dinero por esto.</p>
         )}
         {sale.sold.length > 0 && (
           <p><b>Se vende:</b> {list(sale.sold.map((it) => it.name))} (≈ {formatEuros(sale.total)}). Con lo que se saque, cada uno cobra según lo que puso:{" "}
@@ -636,7 +682,7 @@ function Closed({ home, diss, split, people, stayers, nameOf, realName, me, id, 
   const assignment = accepted ? chosenAssignment(accepted) : null;
   const isExit = diss.kind === "parcial";
   const leavers = split?.leavers ?? [];
-  const keeperName = (v: string) => (v === "vender" ? "Para vender" : v === "piso" ? "Se queda en el piso" : realName(v));
+  const keeperName = (v: string) => (v === "vender" ? "Para vender" : v === "piso" ? "Se queda en la casa" : realName(v));
   const others = leavers.filter((u) => u !== me).map(realName);
   const iLeft = leavers.includes(me);
   const exitText = iLeft
