@@ -15,6 +15,7 @@ type Asset = {
   id: string; household_id: string; name: string; total_cents: number; status: string; version: number;
   receipt_path: string | null; photo_path: string | null; purchase_date: string; visibility: string;
   created_by: string; created_at: string; notes: string | null;
+  gone_reason?: string | null; gone_to?: string | null; gone_at?: string | null; gone_dissolution?: string | null; value_cents?: number | null;
   asset_participants: { user_id: string; amount_cents: number; profiles: { display_name: string } | null }[];
 };
 type Confirmation = { user_id: string; decision: string; comment: string | null; created_at: string; subject_version: number };
@@ -35,6 +36,7 @@ export default function Bien() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState<string | null>(null);
+  const [goneValue, setGoneValue] = useState<number | null>(null);
   const [plans, setPlans] = useState<{ id: string; concept: string; monthly_cents: number; frequency?: string; status: string }[]>([]);
   const [confirmersDb, setConfirmers] = useState<string[] | null>(null);
 
@@ -60,6 +62,10 @@ export default function Bien() {
     setConfirmers(k.error ? null : ((k.data ?? []) as { user_id: string }[]).map((r) => r.user_id));
     setFrozen(h.data?.status !== "activo");
     signedUrls([as.receipt_path ?? "", as.photo_path ?? ""]).then(setUrls);
+    if (as.gone_dissolution) {
+      const { data: dv } = await db.from("dissolution_values").select("value_cents").eq("asset_id", as.id).eq("dissolution_id", as.gone_dissolution).maybeSingle();
+      setGoneValue(dv ? (dv as { value_cents: number }).value_cents : null);
+    } else setGoneValue(null);
   }, [assetId, id]);
 
   useEffect(() => { if (user) load(); }, [user, load]);
@@ -139,6 +145,16 @@ export default function Bien() {
       <Card className="mb-4">
         <p className="text-3xl font-bold tracking-tight">{formatEuros(asset.total_cents)}</p>
         <p className="text-sm text-muted">Comprado el {formatDate(asset.purchase_date)}</p>
+        {asset.gone_reason && (
+          <p className="mt-2 rounded-xl bg-line/60 px-3 py-2 text-sm">
+            {asset.gone_reason === "vendido" ? "En el reparto se decidió venderlo. No cuenta en el hogar mientras no se reactive."
+              : `${asset.gone_to === user.id ? (asset.gone_reason === "llevado" ? "Te lo llevaste" : "Te lo quedaste") : `${asset.gone_reason === "llevado" ? "Se lo llevó" : "Se lo quedó"} ${names[asset.gone_to ?? ""] ?? "alguien"}`}${goneValue !== null ? ` por ${formatEuros(goneValue)}` : ""} en el reparto. Ya no está en el hogar.`}
+            {asset.gone_at && <span className="block text-xs text-muted">{formatDate(asset.gone_at.slice(0, 10))}</span>}
+          </p>
+        )}
+        {!asset.gone_reason && asset.value_cents != null && (
+          <p className="mt-1 text-sm">Valor acordado al reactivarlo: <b>{formatEuros(asset.value_cents)}</b></p>
+        )}
         <div className="mt-3 flex flex-wrap gap-1.5 text-xs font-medium">
           <span className={`rounded-full px-2 py-0.5 ${st.cls}`}>{st.text}</span>
           {!asset.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin ticket</span>}
@@ -186,7 +202,11 @@ export default function Bien() {
         })}
       </Card>
 
-      <Ownership asset={asset} me={user!.id} names={names} active={active} frozen={frozen} />
+      {asset.gone_reason === "vendido" && !frozen && active.includes(user.id) && (
+        <Reactivate asset={asset} me={user.id} names={names} active={active} onDone={load} />
+      )}
+
+      <Ownership asset={asset} me={user!.id} names={names} active={active} frozen={frozen || !!asset.gone_reason} />
 
       {wholeHome && (
         <>
@@ -216,7 +236,7 @@ export default function Bien() {
         </p>
       )}
 
-      {!frozen && (isCreator || iParticipate || iConfirm) && (
+      {!frozen && !asset.gone_reason && (isCreator || iParticipate || iConfirm) && (
         <div className="mb-6 grid grid-cols-2 gap-3">
           <Link href={`/hogar/${id}/anadir?editar=${asset.id}`}><Button variant="secondary">Editar</Button></Link>
           {isCreator && asset.status !== "confirmado"
@@ -383,5 +403,67 @@ function Ownership({ asset, me, names, active, frozen }: { asset: Asset; me: str
         <ErrorBox>{error}</ErrorBox>
       </Card>
     </>
+  );
+}
+
+/* Reactivar algo que era para vender y al final no se vendió */
+function Reactivate({ asset, me, names, active, onDone }:
+  { asset: Asset; me: string; names: Record<string, string>; active: string[]; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const eq = active.length ? Math.floor(100 / active.length) : 0;
+  const [pcts, setPcts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(active.map((u, i) => [u, String(i === 0 ? 100 - eq * (active.length - 1) : eq)])));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const cents = parseEuros(value);
+  const sum = active.reduce((s, u) => s + (Number((pcts[u] ?? "0").replace(",", ".")) || 0), 0);
+  const ok = cents !== null && cents > 0 && Math.abs(sum - 100) < 0.5;
+  async function save() {
+    setBusy(true); setError("");
+    const { error } = await supabase().rpc("reactivate_asset", {
+      p_asset: asset.id, p_value_cents: cents,
+      p_owners: active.map((u) => ({ user_id: u, pct: Number((pcts[u] ?? "0").replace(",", ".")) || 0 })),
+    });
+    setBusy(false);
+    if (error) return setError(errorText(error));
+    setOpen(false); onDone();
+  }
+  if (!open) return (
+    <div className="mb-4">
+      <Button onClick={() => setOpen(true)}>Al final no se vendió: reactivar</Button>
+    </div>
+  );
+  return (
+    <Card className="mb-4 space-y-3">
+      <p className="font-semibold">Reactivar en el hogar</p>
+      <p className="text-sm text-muted">Pon lo que vale hoy y de quién es ahora. Los demás lo tendrán que confirmar.</p>
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium text-muted">Valor de hoy (€)</span>
+        <input value={value} onChange={(e) => setValue(e.target.value)} inputMode="decimal" placeholder={`Costó ${formatEuros(asset.total_cents)}`}
+          className="w-full rounded-xl border border-line bg-bg px-4 py-3 outline-none focus:border-brand" />
+      </label>
+      <div className="space-y-2">
+        <p className="text-sm font-medium text-muted">¿De quién es ahora? (%)</p>
+        {active.map((u) => (
+          <div key={u} className="flex items-center justify-between gap-3">
+            <span className="font-medium">{u === me ? "Tú" : names[u] ?? "?"}</span>
+            <span className="flex w-28 items-center gap-1">
+              <input value={pcts[u] ?? ""} onChange={(e) => setPcts((p) => ({ ...p, [u]: e.target.value }))} inputMode="decimal" aria-label={`Porcentaje de ${names[u] ?? "?"}`}
+                className="w-full rounded-lg border border-line bg-bg px-2 py-1.5 text-right tabular-nums outline-none focus:border-brand" />
+              <span className="text-muted">%</span>
+            </span>
+          </div>
+        ))}
+        <p className={`text-sm ${Math.abs(sum - 100) < 0.5 ? "text-ok" : "text-warn"}`}>
+          {Math.abs(sum - 100) < 0.5 ? "✓ Suma 100 %" : `Suma ${Math.round(sum * 10) / 10} %: tiene que ser 100 %`}
+        </p>
+      </div>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      <div className="grid grid-cols-2 gap-3">
+        <Button variant="secondary" onClick={() => setOpen(false)}>Cancelar</Button>
+        <Button disabled={!ok || busy} onClick={save}>{busy ? "Guardando…" : "Reactivar"}</Button>
+      </div>
+    </Card>
   );
 }

@@ -14,6 +14,7 @@ import { AppBar, Button, Card, ErrorBox, Loading } from "@/components/ui";
 type Asset = {
   id: string; name: string; total_cents: number; status: string; receipt_path: string | null; photo_path: string | null;
   purchase_date: string; visibility: string; created_at: string; gone_reason?: string | null; gone_to?: string | null; category?: string | null;
+  gone_dissolution?: string | null; gone_at?: string | null;
   asset_participants: { user_id: string; amount_cents: number; profiles: { display_name: string } | null }[];
 };
 type Plan = {
@@ -39,6 +40,7 @@ export default function Hogar() {
   const [pendingPlans, setPendingPlans] = useState<Set<string>>(new Set());
   const [dues, setDues] = useState<PendingRow[]>([]);
   const [busy, setBusy] = useState("");
+  const [goneValues, setGoneValues] = useState<Record<string, number>>({});
   const [owners, setOwners] = useState<Record<string, { user_id: string; share: number }[]>>({});
   const [pastExits, setPastExits] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
@@ -91,18 +93,25 @@ export default function Hogar() {
             setOwners(by);
           });
         signedUrls(list.map((a) => a.photo_path ?? a.receipt_path ?? "")).then(setUrls);
+        const gone = list.filter((a) => a.gone_dissolution);
+        if (gone.length) db.from("dissolution_values").select("asset_id, dissolution_id, value_cents").in("asset_id", gone.map((a) => a.id))
+          .then(({ data: dv }) => {
+            const v: Record<string, number> = {};
+            for (const r of (dv ?? []) as { asset_id: string; dissolution_id: string; value_cents: number }[])
+              if (gone.some((a) => a.id === r.asset_id && a.gone_dissolution === r.dissolution_id)) v[r.asset_id] = r.value_cents;
+            setGoneValues(v);
+          });
       });
   }, [user, id, loadPays]);
 
   if (loadError) return <main className="pt-10"><ErrorBox>No se pudo cargar el hogar: {loadError}</ErrorBox></main>;
   if (!home) return <Loading />;
-  const activeIds = new Set(members.filter((m) => m.active).map((m) => m.user_id));
-  // Ya no es del piso: se lo llevó alguien, se vendió, o es de alguien que ya no vive aquí.
-  const isPast = (a: Asset) => a.gone_reason === "llevado" || a.gone_reason === "vendido"
-    || (a.gone_reason === "propio" && !!a.gone_to && members.length > 0 && !activeIds.has(a.gone_to));
+  // Tras un reparto, lo que se quedó alguien (se vaya o no) sale del hogar y pasa al historial.
+  // Lo que era para vender se queda en gris, por si al final no se vende y se reactiva.
+  const isPast = (a: Asset) => a.gone_reason === "llevado" || a.gone_reason === "propio";
   const current = assets.filter((a) => !isPast(a));
   const past = assets.filter(isPast);
-  const total = current.reduce((s, a) => s + a.total_cents, 0);
+  const total = current.filter((a) => a.gone_reason !== "vendido").reduce((s, a) => s + a.total_cents, 0);
   const iLeft = !!me?.left_at;
   const canEdit = home.status === "activo" && !iLeft;
   // Cuotas pendientes agrupadas por mes (las semanales de un mismo mes van juntas).
@@ -206,7 +215,7 @@ export default function Hogar() {
             return (
               <li key={a.id}>
                 <Link href={`/hogar/${id}/bien/${a.id}`} className="block">
-                <Card className={`flex gap-3 ${pending.has(a.id) ? "!border-warn" : ""}`}>
+                <Card className={`flex gap-3 ${pending.has(a.id) ? "!border-warn" : ""} ${a.gone_reason === "vendido" ? "opacity-50 grayscale" : ""}`}>
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-bg text-2xl">
                     {urls[a.photo_path ?? a.receipt_path ?? ""]
                       // eslint-disable-next-line @next/next/no-img-element
@@ -222,10 +231,8 @@ export default function Hogar() {
                     <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-medium">
                       <span className={`rounded-full px-2 py-0.5 ${st.cls}`}>{st.text}</span>
                       {a.category && <span className="rounded-full bg-line px-2 py-0.5 text-muted">{a.category}</span>}
-                      {a.gone_reason && (
-                        <span className="rounded-full bg-line px-2 py-0.5 text-muted">
-                          {a.gone_reason === "vendido" ? "Para vender" : a.gone_reason === "llevado" ? `Se lo llevó ${nameOf(a.gone_to)}` : `Ahora es de ${nameOf(a.gone_to)}`}
-                        </span>)}
+                      {a.gone_reason === "vendido" && (
+                        <span className="rounded-full bg-ink px-2 py-0.5 text-bg">Para vender · no cuenta · toca para reactivar</span>)}
                       {!a.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin ticket</span>}
                       {pending.has(a.id) && <span className="rounded-full bg-warn px-2 py-0.5 text-white">Te toca confirmar</span>}
                       {plansOf(a.id).map((p) => (
@@ -246,7 +253,7 @@ export default function Hogar() {
       {past.length > 0 && (
         <section className="mt-8">
           <button type="button" onClick={() => setShowHistory((v) => !v)} className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-muted">
-            <span>Historial: ya no está en el piso ({past.length})</span><span>{showHistory ? "▲" : "▼"}</span>
+            <span>Historial: ya no está en el hogar ({past.length})</span><span>{showHistory ? "▲" : "▼"}</span>
           </button>
           {showHistory && (
             <ul className="space-y-2">
@@ -257,10 +264,16 @@ export default function Hogar() {
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{a.name}</span>
                         <span className="block text-xs text-muted">
-                          {a.gone_reason === "vendido" ? "Para vender" : a.gone_reason === "llevado" ? `Se lo llevó ${nameOf(a.gone_to)}` : `Es de ${nameOf(a.gone_to)}, que ya no vive aquí`}
+                          {a.gone_to === user?.id ? (a.gone_reason === "llevado" ? "Te lo llevaste" : "Te lo quedaste")
+                            : `${a.gone_reason === "llevado" ? "Se lo llevó" : "Se lo quedó"} ${nameOf(a.gone_to)}`}
+                          {goneValues[a.id] !== undefined ? ` por ${formatEuros(goneValues[a.id])}` : ""}
+                          {a.gone_at ? ` · ${new Date(a.gone_at).toLocaleDateString("es-ES")}` : ""}
+                        </span>
+                        <span className="block text-xs text-muted">
+                          Costó {formatEuros(a.total_cents)}: {a.asset_participants.filter((p) => p.amount_cents > 0).map((p) => `${p.profiles?.display_name ?? "?"} ${formatEuros(p.amount_cents)}`).join(" · ")}
                         </span>
                       </span>
-                      <span className="shrink-0 text-sm font-semibold">{formatEuros(a.total_cents)}</span>
+                      <span className="shrink-0 text-sm font-semibold">{formatEuros(goneValues[a.id] ?? a.total_cents)}</span>
                     </Card>
                   </Link>
                 </li>
