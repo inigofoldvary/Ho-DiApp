@@ -8,6 +8,7 @@ import { formatEuros } from "@/lib/money";
 import { signedUrls } from "@/lib/photos";
 import { STATUS, formatDate, formatDateTime } from "@/lib/status";
 import { perFreq } from "@/lib/frequency";
+import { parseEuros } from "@/lib/money";
 import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
 type Asset = {
@@ -185,6 +186,8 @@ export default function Bien() {
         })}
       </Card>
 
+      <Ownership asset={asset} me={user!.id} names={names} active={active} frozen={frozen} />
+
       {wholeHome && (
         <>
           <h2 className="mb-2 text-sm font-semibold text-muted">{asset.status === "confirmado" ? "Lo confirmaron" : "Lo tiene que confirmar el hogar"}</h2>
@@ -263,5 +266,122 @@ export default function Bien() {
       )}
       {!canAnswer && error && <ErrorBox>{error}</ErrorBox>}
     </main>
+  );
+}
+
+type Buyin = { id: string; buyer: string; share: number; price_cents: number; status: string; comment: string | null; created_at: string; sellers: { user_id: string; cents: number }[] | null };
+
+/** De quién es ahora y comprar una parte (p. ej. quien entra nuevo en el piso). */
+function Ownership({ asset, me, names, active, frozen }: { asset: Asset; me: string; names: Record<string, string>; active: string[]; frozen: boolean }) {
+  const [shares, setShares] = useState<{ user_id: string; share: number }[] | null>(null);
+  const [buyins, setBuyins] = useState<Buyin[]>([]);
+  const [oks, setOks] = useState<Record<string, string[]>>({});
+  const [open, setOpen] = useState(false);
+  const [pct, setPct] = useState("");
+  const [price, setPrice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const nm = (u: string) => (u === me ? "Tú" : names[u] ?? "Antiguo miembro");
+
+  const load = useCallback(async () => {
+    const db = supabase();
+    const [s, b] = await Promise.all([
+      db.rpc("asset_current_shares", { p_asset: asset.id }),
+      db.from("asset_buyins").select("*").eq("asset_id", asset.id).order("created_at", { ascending: false }),
+    ]);
+    if (s.error) { setShares(null); return; } // aún sin el SQL 09
+    setShares(((s.data ?? []) as { user_id: string; share: number }[]).map((r) => ({ user_id: r.user_id, share: Number(r.share) })));
+    const list = (b.data ?? []) as Buyin[];
+    setBuyins(list);
+    const pend = list.filter((x) => x.status === "pendiente");
+    if (pend.length) {
+      const k = await db.from("asset_buyin_oks").select("buyin_id, user_id").in("buyin_id", pend.map((x) => x.id));
+      const by: Record<string, string[]> = {};
+      for (const r of (k.data ?? []) as { buyin_id: string; user_id: string }[]) (by[r.buyin_id] ??= []).push(r.user_id);
+      setOks(by);
+    }
+  }, [asset.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function rpc(fn: string, args: Record<string, unknown>) {
+    setBusy(true); setError("");
+    const { error } = await supabase().rpc(fn, args);
+    setBusy(false);
+    if (error) { setError(errorText(error)); return false; }
+    await load();
+    return true;
+  }
+
+  if (!shares || !shares.length) return null;
+  const pending = buyins.find((b) => b.status === "pendiente");
+  const done = buyins.filter((b) => b.status === "aceptada");
+  const iOwn = shares.some((s) => s.user_id === me);
+  const myShare = shares.find((s) => s.user_id === me)?.share ?? 0;
+  const canBuy = !frozen && active.includes(me) && asset.status === "confirmado" && myShare < 0.995 && !pending;
+  const years = Math.max(0, Math.floor((Date.now() - new Date(asset.purchase_date + "T00:00:00").getTime()) / (365.25 * 86400000)));
+  const valueNow = Math.round((asset.total_cents * Math.pow(0.85, years)) / 1000) * 1000;
+  const p = parseFloat(pct.replace(",", "."));
+  const pctOk = Number.isFinite(p) && p >= 1 && p <= 99;
+  const priceCents = parseEuros(price);
+
+  return (
+    <>
+      <h2 className="mb-2 text-sm font-semibold text-muted">De quién es ahora</h2>
+      <Card className="mb-4 space-y-3">
+        <div className="flex flex-wrap gap-1.5 text-sm">
+          {[...shares].sort((a, b) => b.share - a.share).map((s) => (
+            <span key={s.user_id} className="rounded-full bg-ok-bg px-2.5 py-1 font-medium text-ok">{nm(s.user_id)} {Math.round(s.share * 100)} %</span>
+          ))}
+        </div>
+        {done.map((b) => (
+          <p key={b.id} className="text-xs text-muted">
+            {formatDateTime(b.created_at)} · {nm(b.buyer)} compró el {Math.round(b.share * 100)} % por {formatEuros(b.price_cents)}
+            {b.sellers?.length ? ` (${b.sellers.map((x) => `a ${nm(x.user_id)} ${formatEuros(x.cents)}`).join(", ")})` : ""}.
+          </p>
+        ))}
+
+        {pending && (
+          <div className="rounded-xl bg-warn-bg px-3 py-3 text-sm text-warn">
+            <p className="font-semibold">{nm(pending.buyer)} quiere comprar el {Math.round(pending.share * 100)} % por {formatEuros(pending.price_cents)}</p>
+            {pending.comment && <p className="mt-1">“{pending.comment}”</p>}
+            <p className="mt-1 text-xs">Tienen que aceptar los dueños: {shares.filter((s) => s.user_id !== pending.buyer).map((s) => `${nm(s.user_id)} ${(oks[pending.id] ?? []).includes(s.user_id) ? "✓" : "⏳"}`).join(" · ")}</p>
+            {iOwn && pending.buyer !== me && !(oks[pending.id] ?? []).includes(me) && !frozen && (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Button variant="secondary" disabled={busy} onClick={() => rpc("answer_buyin", { p_buyin: pending.id, p_accept: false })}>No</Button>
+                <Button disabled={busy} onClick={() => rpc("answer_buyin", { p_buyin: pending.id, p_accept: true })}>Aceptar ✓</Button>
+              </div>
+            )}
+            {pending.buyer === me && (
+              <Button variant="ghost" disabled={busy} onClick={() => rpc("answer_buyin", { p_buyin: pending.id, p_accept: false })}>Retirar mi propuesta</Button>
+            )}
+          </div>
+        )}
+
+        {canBuy && !open && (
+          <Button variant="secondary" onClick={() => { setOpen(true); setPrice(""); setPct(""); }}>{iOwn ? "Comprar más parte" : "Quiero comprar una parte"}</Button>
+        )}
+        {canBuy && open && (
+          <div className="space-y-2">
+            <p className="text-sm text-muted">Propón qué % quieres y cuánto pagas. Los dueños tienen que aceptar. Hoy vale unos {formatEuros(valueNow)} (pierde un 15 % por año).</p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block text-sm"><span className="mb-1 block text-muted">% que compras</span>
+                <input value={pct} inputMode="decimal" placeholder="Ej. 25"
+                  onChange={(e) => { setPct(e.target.value); const v = parseFloat(e.target.value.replace(",", ".")); if (Number.isFinite(v)) setPrice(String(Math.round(valueNow * v / 100) / 100).replace(".", ",")); }}
+                  className="w-full rounded-xl border border-line bg-bg px-3 py-2 outline-none focus:border-brand" /></label>
+              <label className="block text-sm"><span className="mb-1 block text-muted">Pagas (€)</span>
+                <input value={price} inputMode="decimal" onChange={(e) => setPrice(e.target.value)}
+                  className="w-full rounded-xl border border-line bg-bg px-3 py-2 outline-none focus:border-brand" /></label>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={() => setOpen(false)}>Cancelar</Button>
+              <Button disabled={busy || !pctOk || priceCents === null} onClick={async () => {
+                if (await rpc("propose_buyin", { p_asset: asset.id, p_share: p / 100, p_price_cents: priceCents })) setOpen(false);
+              }}>Enviar</Button>
+            </div>
+          </div>
+        )}
+        <ErrorBox>{error}</ErrorBox>
+      </Card>
+    </>
   );
 }

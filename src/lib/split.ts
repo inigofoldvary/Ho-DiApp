@@ -4,7 +4,8 @@ import { supabase } from "./supabase";
 export type SplitItem = {
   id: string; name: string; price_cents: number; purchase_date: string; photo_path: string | null; receipt_path: string | null;
   value_cents: number;
-  paid: Record<string, number>; // céntimos puestos por cada persona
+  paid: Record<string, number>; // céntimos puestos por cada persona (o su % actual si `owned`)
+  owned?: boolean;
 };
 export type Assignment = Record<string, string>; // asset_id -> user_id | "vender" | "piso" (se queda para los que siguen)
 export type Transfer = { from: string; to: string; cents: number };
@@ -13,7 +14,17 @@ export type Dissolution = {
   id: string; kind: string; status: string; phase: string; values_version: number; version: number;
   created_by: string; created_at: string; completed_at: string | null;
 };
-export type Offer = { id: string; from_user: string; assignment: Assignment; note: string | null; status: string; created_at: string };
+export type Offer = {
+  id: string; from_user: string; assignment: Assignment; assignment_b: Assignment | null; chosen: string | null;
+  note: string | null; status: string; created_at: string;
+};
+export type OfferOk = { user_id: string; choice: "a" | "b" | null };
+export type ValueChange = { asset_id: string; user_id: string | null; old_cents: number | null; new_cents: number; created_at: string };
+
+/** El reparto aprobado (opción A o B). */
+export function chosenAssignment(o: Offer): Assignment {
+  return o.chosen === "b" && o.assignment_b ? o.assignment_b : o.assignment;
+}
 
 export type SplitState = {
   diss: Dissolution;
@@ -22,7 +33,8 @@ export type SplitState = {
   picksDone: string[];
   wants: Record<string, string[]>; // user -> assets
   offers: Offer[];             // de la más antigua a la más nueva
-  offerOks: Record<string, string[]>; // offer -> users
+  offerOks: Record<string, OfferOk[]>; // offer -> quién la aprueba y qué opción
+  valueLog: ValueChange[];     // quién propuso cada valor
   leavers: string[];           // quién se va (en una disolución total, todos)
 };
 
@@ -40,14 +52,15 @@ export function shareOf(it: SplitItem, user: string, among?: string[]): number {
 
 export async function loadSplit(householdId: string, diss: Dissolution): Promise<SplitState> {
   const db = supabase();
-  const [v, ok, pd, w, of, lv] = await Promise.all([
+  const [v, ok, pd, w, of, lv, vl] = await Promise.all([
     db.from("dissolution_values").select("asset_id, value_cents, assets(name, total_cents, purchase_date, photo_path, receipt_path, asset_participants(user_id, amount_cents))")
       .eq("dissolution_id", diss.id),
     db.from("dissolution_value_oks").select("user_id").eq("dissolution_id", diss.id).eq("values_version", diss.values_version),
     db.from("dissolution_picks_done").select("user_id").eq("dissolution_id", diss.id),
     db.from("dissolution_wants").select("user_id, asset_id").eq("dissolution_id", diss.id),
-    db.from("dissolution_offers").select("id, from_user, assignment, note, status, created_at").eq("dissolution_id", diss.id).order("created_at"),
+    db.from("dissolution_offers").select("*").eq("dissolution_id", diss.id).order("created_at"),
     db.from("dissolution_leavers").select("user_id").eq("dissolution_id", diss.id),
+    db.from("dissolution_value_log").select("asset_id, user_id, old_cents, new_cents, created_at").eq("dissolution_id", diss.id).order("created_at"),
   ]);
   for (const r of [v, ok, pd, w, of]) if (r.error) throw r.error;
 
@@ -76,21 +89,32 @@ export async function loadSplit(householdId: string, diss: Dissolution): Promise
       }
     }
   }
+  // Si tras una salida o una compra ya consta de quién es cada cosa, manda eso (en %).
+  if (items.length) {
+    const ow = await db.from("asset_owners").select("asset_id, user_id, share").in("asset_id", items.map((i) => i.id));
+    if (!ow.error && ow.data?.length) {
+      const by: Record<string, Record<string, number>> = {};
+      for (const r of ow.data as { asset_id: string; user_id: string; share: number }[]) (by[r.asset_id] ??= {})[r.user_id] = Number(r.share) * 1_000_000;
+      for (const it of items) if (by[it.id]) { it.paid = by[it.id]; it.owned = true; }
+    }
+  }
   items.sort((a, b) => b.value_cents - a.value_cents || a.name.localeCompare(b.name));
 
   const wants: Record<string, string[]> = {};
   for (const r of (w.data ?? []) as { user_id: string; asset_id: string }[]) (wants[r.user_id] ??= []).push(r.asset_id);
-  const offers = (of.data ?? []) as Offer[];
-  const offerOks: Record<string, string[]> = {};
+  const offers = ((of.data ?? []) as Offer[]).map((o) => ({ ...o, assignment_b: o.assignment_b ?? null, chosen: o.chosen ?? null }));
+  const offerOks: Record<string, OfferOk[]> = {};
   if (offers.length) {
-    const k = await db.from("dissolution_offer_oks").select("offer_id, user_id").in("offer_id", offers.map((o) => o.id));
-    for (const r of (k.data ?? []) as { offer_id: string; user_id: string }[]) (offerOks[r.offer_id] ??= []).push(r.user_id);
+    const k = await db.from("dissolution_offer_oks").select("*").in("offer_id", offers.map((o) => o.id));
+    for (const r of (k.data ?? []) as { offer_id: string; user_id: string; choice?: "a" | "b" | null }[])
+      (offerOks[r.offer_id] ??= []).push({ user_id: r.user_id, choice: r.choice ?? null });
   }
   return {
     diss, items,
     valueOks: ((ok.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
     picksDone: ((pd.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
     wants, offers, offerOks,
+    valueLog: (vl.error ? [] : (vl.data ?? [])) as ValueChange[],
     leavers: ((lv.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
   };
 }
@@ -195,4 +219,18 @@ export function sameAssignment(x: Assignment, y: Assignment) {
   const keys = new Set([...Object.keys(x), ...Object.keys(y)]);
   for (const k of keys) if (x[k] !== y[k]) return false;
   return true;
+}
+
+/** Explicación en frases de un reparto, persona a persona. */
+export function explain(items: SplitItem[], a: Assignment, people: string[], stayers: string[]) {
+  const b = balances(items, a, people, stayers);
+  const kept = items.filter((it) => a[it.id] && a[it.id] !== "vender");
+  return people.map((u) => {
+    const mine = items.filter((it) => a[it.id] === u);
+    const fromHome = items.filter((it) => a[it.id] === "piso" && stayers.includes(u))
+      .map((it) => ({ it, cents: it.value_cents * shareOf(it, u, stayers) })).filter((x) => x.cents >= 1);
+    const gets = mine.reduce((s, it) => s + it.value_cents, 0) + fromHome.reduce((s, x) => s + x.cents, 0);
+    const due = kept.reduce((s, it) => s + it.value_cents * shareOf(it, u, people), 0);
+    return { user: u, mine, fromHome, gets: Math.round(gets), due: Math.round(due), balance: Math.round(b[u] ?? 0) };
+  });
 }

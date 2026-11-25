@@ -9,7 +9,7 @@ import { formatEuros, parseEuros } from "@/lib/money";
 import { formatDateTime } from "@/lib/status";
 import { signedUrls } from "@/lib/photos";
 import {
-  loadSplit, proposalBalanced, proposalByPaid, balances, transfers, saleSplit, shareOf, sameAssignment,
+  loadSplit, proposalBalanced, proposalByPaid, balances, transfers, saleSplit, shareOf, sameAssignment, explain, chosenAssignment,
   type Assignment, type Dissolution, type SplitState, type SplitItem,
 } from "@/lib/split";
 import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
@@ -135,7 +135,7 @@ export default function Disolver() {
       )}
 
       {closed && diss && (
-        <Closed home={home} diss={diss} split={split} people={people} stayers={stayers} nameOf={nameOf} realName={realName} id={id} setError={setError} />
+        <Closed home={home} diss={diss} split={split} people={people} stayers={stayers} nameOf={nameOf} realName={realName} me={user.id} id={id} setError={setError} />
       )}
 
       {home.status === "activo" && !closed && (
@@ -281,7 +281,7 @@ function PhaseValues({ split, people, me, nameOf, urls, busy, call }:
     <>
       <div>
         <h2 className="text-lg font-semibold">¿Cuánto vale hoy cada cosa?</h2>
-        <p className="text-sm text-muted">La app propone un valor (pierde un 15 % por cada año). Cambiadlo si no cuadra: puede valer más o menos de lo que costó.</p>
+        <p className="text-sm text-muted">La app propone un valor (pierde un 15 % por cada año). Cambiadlo si no cuadra: puede valer más o menos de lo que costó. Debajo de cada cosa verás qué precio ha puesto cada uno; en rojo, lo último que ha cambiado otra persona.</p>
       </div>
       {split.items.length === 0 ? (
         <Card className="text-sm text-muted">No hay bienes confirmados que repartir. Dad el OK y pasaréis directamente al final.</Card>
@@ -289,8 +289,15 @@ function PhaseValues({ split, people, me, nameOf, urls, busy, call }:
         <Card className="divide-y divide-line !p-0">
           {split.items.map((it) => {
             const diff = it.value_cents - it.price_cents;
+            const log = split.valueLog.filter((l) => l.asset_id === it.id);
+            const appValue = log[0]?.old_cents ?? it.value_cents;
+            const byUser = new Map<string, number>();
+            for (const l of log) if (l.user_id) byUser.set(l.user_id, l.new_cents);
+            const last = log.at(-1);
+            const red = !!last && last.user_id !== me;
             return (
-              <div key={it.id} className="flex items-center gap-3 px-3 py-2.5">
+              <div key={it.id} className={`px-3 py-2.5 ${red ? "border-l-4 !border-l-bad bg-bad-bg/40" : ""}`}>
+              <div className="flex items-center gap-3">
                 <Thumb it={it} urls={urls} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{it.name}</p>
@@ -308,6 +315,17 @@ function PhaseValues({ split, people, me, nameOf, urls, busy, call }:
                     className="w-full rounded-lg border border-line bg-bg px-2 py-1.5 text-right font-semibold tabular-nums outline-none focus:border-brand" />
                   <span className="text-muted">€</span>
                 </div>
+              </div>
+              {log.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5 pl-[3.75rem] text-xs">
+                  <span className="rounded-full bg-line px-2 py-0.5 text-muted">La app: {formatEuros(appValue)}</span>
+                  {[...byUser.entries()].map(([u, c]) => (
+                    <span key={u} className={`rounded-full px-2 py-0.5 ${u === last?.user_id && u !== me ? "bg-bad text-white" : "bg-line text-muted"}`}>
+                      {nameOf(u)}: {formatEuros(c)}
+                    </span>
+                  ))}
+                </div>
+              )}
               </div>
             );
           })}
@@ -369,52 +387,73 @@ function PhasePick({ split, people, me, nameOf, urls, busy, call }:
 }
 
 /* ---------- Fase 3: acuerdo ---------- */
+type Opt = "a" | "b";
+const OPT_LABEL: Record<Opt, string> = { a: "Opción A", b: "Opción B" };
+
+function keeperLabel(v: string | undefined, nameOf: (u: string) => string) {
+  return !v || v === "vender" ? "Vender" : v === "piso" ? "Se queda en el piso" : nameOf(v);
+}
+
 function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
   { split: SplitState; people: string[]; stayers: string[]; me: string; nameOf: (u: string) => string; busy: boolean; call: CallFn }) {
-  const open = [...split.offers].reverse().find((o) => o.status === "pendiente") ?? null;
+  const offers = split.offers;
+  const open = [...offers].reverse().find((o) => o.status === "pendiente") ?? null;
+  const prev = open ? offers[offers.indexOf(open) - 1] ?? null : null;
   const oks = open ? split.offerOks[open.id] ?? [] : [];
-  const iApproved = !!open && oks.includes(me);
+  const myOk = oks.find((k) => k.user_id === me);
+  const iSent = !!open && open.from_user === me;
   const nobody = stayers.length ? "piso" : "vender";
   const p1 = useMemo(() => proposalByPaid(split.items, split.wants, people, nobody), [split, people, nobody]);
   const p2 = useMemo(() => proposalBalanced(split.items, split.wants, people, nobody, stayers), [split, people, nobody, stayers]);
-  const [opt, setOpt] = useState<1 | 2>(1);
-  const [edited, setEdited] = useState<Assignment | null>(null);
-  const [note, setNote] = useState("");
 
-  const baseAssign: Assignment = open ? open.assignment : opt === 1 ? p1 : p2;
-  const assign = edited ?? baseAssign;
-  const changed = !!edited && !sameAssignment(edited, baseAssign);
+  const base: Record<Opt, Assignment> = open
+    ? { a: open.assignment, b: open.assignment_b ?? open.assignment }
+    : { a: p1, b: p2 };
+  const [tab, setTab] = useState<Opt>("a");
+  const [draft, setDraft] = useState<Record<Opt, Assignment | null>>({ a: null, b: null });
+  const [note, setNote] = useState("");
+  const cur: Record<Opt, Assignment> = { a: draft.a ?? base.a, b: draft.b ?? base.b };
+  const changedByMe = (o: Opt, itemId: string) => !!draft[o] && draft[o]![itemId] !== base[o][itemId];
+  const anyChange = (["a", "b"] as Opt[]).some((o) => draft[o] && !sameAssignment(draft[o]!, base[o]));
+  // Cambiado por otra persona respecto a la propuesta anterior
+  const prevOf = (o: Opt) => (prev ? (o === "b" ? prev.assignment_b ?? prev.assignment : prev.assignment) : null);
+  const changedByOthers = (o: Opt, itemId: string) => !!open && !iSent && !!prevOf(o) && prevOf(o)![itemId] !== base[o][itemId];
+  const canEdit = !iSent;
 
   function cycle(itemId: string) {
+    if (!canEdit) return;
     const order = [...people, ...(stayers.length ? ["piso"] : []), "vender"];
-    const cur = assign[itemId] ?? nobody;
-    setEdited({ ...assign, [itemId]: order[(order.indexOf(cur) + 1) % order.length] });
+    const now = cur[tab][itemId] ?? nobody;
+    setDraft((d) => ({ ...d, [tab]: { ...cur[tab], [itemId]: order[(order.indexOf(now) + 1) % order.length] } }));
+  }
+  async function send() {
+    if (await call("dissolution_send_offer", { p_dissolution: split.diss.id, p_assignment: cur.a, p_assignment_b: cur.b, p_note: note })) {
+      setDraft({ a: null, b: null }); setNote("");
+    }
   }
 
-  const wantTable = (
-    <Card className="overflow-x-auto !p-3">
-      <p className="mb-2 font-semibold">Lo que ha pedido cada uno</p>
-      <table className="w-full text-sm">
-        <thead><tr className="text-left text-muted"><th className="py-1 font-medium">Bien</th>{people.map((u) => <th key={u} className="px-1 py-1 text-center font-medium">{nameOf(u)}</th>)}</tr></thead>
-        <tbody>
-          {split.items.map((it) => (
-            <tr key={it.id} className="border-t border-line">
-              <td className="py-1.5">{it.name}</td>
-              {people.map((u) => <td key={u} className="text-center">{split.wants[u]?.includes(it.id) ? "✋" : <span className="text-muted">·</span>}</td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="mt-2 text-xs text-muted">✋ = lo quiere. Si no lo quiere nadie, se propone {stayers.length ? "que se quede en el piso" : "venderlo"}.</p>
+  const approvals = (
+    <Card className="divide-y divide-line !p-0">
+      {people.map((u) => {
+        const k = oks.find((x) => x.user_id === u);
+        return (
+          <div key={u} className="flex items-center justify-between px-4 py-2.5 text-sm">
+            <span className="font-medium">{nameOf(u)}</span>
+            <span className={k ? "text-ok" : "text-muted"}>
+              {!k ? "⏳ Falta que elija" : k.choice ? `✓ Aprueba la ${OPT_LABEL[k.choice]}` : "✓ La ha enviado (vale A o B)"}
+            </span>
+          </div>
+        );
+      })}
     </Card>
   );
 
-  const history = split.offers.length > 0 && (
+  const history = offers.length > 0 && (
     <Card className="space-y-1.5 !p-3 text-sm">
       <p className="font-semibold">Historial</p>
-      {split.offers.map((o, i) => (
+      {offers.map((o, i) => (
         <p key={o.id} className="text-muted">
-          {formatDateTime(o.created_at)} · {nameOf(o.from_user)} {i === 0 ? "propuso un reparto" : "lo devolvió con cambios"}
+          {formatDateTime(o.created_at)} · {nameOf(o.from_user)} {i === 0 ? "envió las opciones" : "las devolvió con cambios"}
           {o.note ? `: “${o.note}”` : ""}
         </p>
       ))}
@@ -423,161 +462,151 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
 
   return (
     <>
-      {!open && (
-        <>
-          {wantTable}
-          <div>
-            <h2 className="text-lg font-semibold">Dos propuestas de la app</h2>
-            <p className="text-sm text-muted">Elige una, cámbiala si quieres (toca un objeto) y envíala a los demás.</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {([1, 2] as const).map((o) => (
-              <button key={o} type="button" onClick={() => { setOpt(o); setEdited(null); }} aria-pressed={opt === o}
-                className={`rounded-xl border-2 bg-card px-3 py-2 text-left text-sm font-semibold ${opt === o ? "border-brand bg-ok-bg" : "border-line"}`}>
-                Opción {o}
-                <span className="block text-xs font-normal text-muted">{o === 1 ? "Manda quien más pagó" : "Se mueve menos dinero"}</span>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-      {open && !iApproved && (
-        <div>
-          <h2 className="text-lg font-semibold">{nameOf(open.from_user)} propone este reparto</h2>
-          <p className="text-sm text-muted">Apruébalo tal cual, o toca un objeto para cambiarlo y devuélveselo.</p>
-          {open.note && <p className="mt-2 rounded-xl bg-line/60 px-3 py-2 text-sm">“{open.note}”</p>}
-        </div>
-      )}
-      {open && iApproved && (
-        <div>
-          <h2 className="text-lg font-semibold">Reparto enviado</h2>
-          <p className="text-sm text-muted">Falta que lo aprueben los demás. Pueden aprobarlo o devolvértelo con cambios.</p>
-        </div>
-      )}
+      <div>
+        {!open && <><h2 className="text-lg font-semibold">Dos opciones para enviar</h2>
+          <p className="text-sm text-muted">La app prepara la A (manda quien más pagó) y la B (se mueve menos dinero). Cámbialas si quieres tocando un objeto, y envía las dos.</p></>}
+        {open && !iSent && <><h2 className="text-lg font-semibold">{nameOf(open.from_user)} os envía dos opciones</h2>
+          <p className="text-sm text-muted">Aprueba la A o la B. Si ninguna te convence, toca un objeto para cambiarla y devuélvelas.</p>
+          {open.note && <p className="mt-2 rounded-xl bg-line/60 px-3 py-2 text-sm">“{open.note}”</p>}</>}
+        {open && iSent && <><h2 className="text-lg font-semibold">Opciones enviadas</h2>
+          <p className="text-sm text-muted">Falta que los demás aprueben una. Pueden devolvértelas con cambios.</p></>}
+      </div>
 
-      <SplitSummary items={split.items} assign={assign} people={people} stayers={stayers} nameOf={nameOf} />
+      <div className="grid grid-cols-2 gap-2">
+        {(["a", "b"] as Opt[]).map((o) => (
+          <button key={o} type="button" onClick={() => setTab(o)} aria-pressed={tab === o}
+            className={`rounded-xl border-2 bg-card px-3 py-2 text-left text-sm font-semibold ${tab === o ? "border-brand bg-ok-bg" : "border-line"}`}>
+            {OPT_LABEL[o]}
+            <span className="block text-xs font-normal text-muted">
+              {split.items.some((it) => changedByOthers(o, it.id)) ? <span className="text-bad">Con cambios de otros</span>
+                : !open ? (o === "a" ? "Manda quien más pagó" : "Se mueve menos dinero") : "Toca para verla"}
+            </span>
+          </button>
+        ))}
+      </div>
 
-      <Card className="!p-3">
-        <p className="mb-2 font-semibold">Quién se queda qué</p>
-        <ul className="space-y-1.5">
-          {split.items.map((it) => {
-            const who = assign[it.id] ?? nobody;
-            const wanters = people.filter((u) => split.wants[u]?.includes(it.id));
-            const canEdit = !iApproved;
-            return (
-              <li key={it.id}>
-                <button type="button" disabled={!canEdit || busy} onClick={() => cycle(it.id)}
-                  className="flex w-full items-center gap-3 rounded-xl border border-line bg-bg px-3 py-2 text-left disabled:cursor-default">
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{it.name} · <span className="tabular-nums">{formatEuros(it.value_cents)}</span></span>
-                    <span className="block truncate text-xs text-muted">
-                      {people.filter((u) => shareOf(it, u, people) > 0).map((u) => `${nameOf(u)} ${Math.round(shareOf(it, u, people) * 100)} %`).join(" · ") || "—"}
-                      {" · lo quiere: "}{wanters.map(nameOf).join(" y ") || "nadie"}
+      <SplitSummary items={split.items} assign={cur[tab]} people={people} stayers={stayers} nameOf={nameOf} me={me} />
+
+      <div className="space-y-2">
+        <p className="font-semibold">Objeto a objeto</p>
+        {split.items.map((it) => {
+          const red = changedByOthers("a", it.id) || changedByOthers("b", it.id);
+          return (
+            <Card key={it.id} className={`!p-3 ${red ? "!border-2 !border-bad" : ""}`}>
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="truncate font-semibold">{it.name}</p>
+                <p className="shrink-0 font-semibold tabular-nums">{formatEuros(it.value_cents)}</p>
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+                {people.map((u) => {
+                  const pct = Math.round(shareOf(it, u, people) * 100);
+                  const wants = split.wants[u]?.includes(it.id);
+                  return (
+                    <span key={u} className={`rounded-full px-2 py-0.5 ${wants ? "bg-accent text-white" : "bg-line text-muted"}`}>
+                      {nameOf(u)} {pct} %{wants ? " · lo quiere ✋" : ""}
                     </span>
-                  </span>
-                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${who === "vender" ? "bg-line text-muted" : who === "piso" ? "bg-ok-bg text-ok" : who === me ? "bg-brand text-brand-ink" : "bg-accent text-white"}`}>
-                    {who === "vender" ? "Vender" : who === "piso" ? "Se queda en el piso" : nameOf(who)}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-        {!iApproved && <p className="mt-2 text-xs text-muted">Toca un objeto para cambiar quién se lo queda.</p>}
-      </Card>
+                  );
+                })}
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {(["a", "b"] as Opt[]).map((o) => {
+                  const v = cur[o][it.id] ?? nobody;
+                  const mineChanged = changedByMe(o, it.id);
+                  const othersChanged = changedByOthers(o, it.id);
+                  return (
+                    <button key={o} type="button" disabled={!canEdit || busy || tab !== o} onClick={() => cycle(it.id)}
+                      className={`rounded-xl border-2 px-2 py-1.5 text-left text-xs disabled:cursor-default ${othersChanged ? "border-bad" : mineChanged ? "border-warn" : tab === o ? "border-brand" : "border-line opacity-60"}`}>
+                      <span className="block text-muted">{o.toUpperCase()}{othersChanged && prevOf(o) ? ` · antes: ${keeperLabel(prevOf(o)![it.id], nameOf)}` : mineChanged ? " · cambiado por ti" : ""}</span>
+                      <span className="block font-semibold">{keeperLabel(v, nameOf)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })}
+        {canEdit && <p className="text-xs text-muted">Toca la casilla de la opción que estás viendo ({tab.toUpperCase()}) para cambiar quién se lo queda. En rojo, lo que han cambiado los demás.</p>}
+      </div>
 
-      {!iApproved && (changed || !open) && (
+      {canEdit && (anyChange || !open) && (
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} id="nota-reparto"
           placeholder="Mensaje opcional. Ej. te dejo la tele si me quedo el sofá"
           className="w-full rounded-xl border border-line bg-card px-4 py-3 text-sm outline-none focus:border-brand" />
       )}
-
-      {!open && (
-        <Button disabled={busy} onClick={async () => {
-          if (await call("dissolution_send_offer", { p_dissolution: split.diss.id, p_assignment: assign, p_note: note })) { setEdited(null); setNote(""); }
-        }}>Enviar este reparto a los demás</Button>
-      )}
-      {open && !iApproved && (changed ? (
+      {!open && <Button disabled={busy} onClick={send}>Enviar las dos opciones</Button>}
+      {open && !iSent && (anyChange ? (
         <div className="grid grid-cols-2 gap-3">
-          <Button variant="secondary" disabled={busy} onClick={() => setEdited(null)}>Deshacer cambios</Button>
-          <Button disabled={busy} onClick={async () => {
-            if (await call("dissolution_send_offer", { p_dissolution: split.diss.id, p_assignment: assign, p_note: note })) { setEdited(null); setNote(""); }
-          }}>Devolver con cambios</Button>
+          <Button variant="secondary" disabled={busy} onClick={() => setDraft({ a: null, b: null })}>Deshacer cambios</Button>
+          <Button disabled={busy} onClick={send}>Devolver con cambios</Button>
         </div>
       ) : (
-        <Button disabled={busy} onClick={() => call("dissolution_accept_offer", { p_offer: open.id })}>Aprobar este reparto ✓</Button>
+        <Button disabled={busy || myOk?.choice === tab} onClick={() => call("dissolution_accept_offer", { p_offer: open.id, p_choice: tab })}>
+          {myOk?.choice === tab ? `Ya apruebas la ${OPT_LABEL[tab]} ✓` : `Aprobar la ${OPT_LABEL[tab]} ✓`}
+        </Button>
       ))}
-      {open && <WhoList people={people} ok={oks} nameOf={nameOf} yes="Lo aprueba" no="Falta que lo apruebe" />}
-      {open && wantTable}
+      {open && approvals}
       {history}
     </>
   );
 }
 
-function SplitSummary({ items, assign, people, stayers, nameOf }: { items: SplitItem[]; assign: Assignment; people: string[]; stayers: string[]; nameOf: (u: string) => string }) {
+function SplitSummary({ items, assign, people, stayers, nameOf, me }:
+  { items: SplitItem[]; assign: Assignment; people: string[]; stayers: string[]; nameOf: (u: string) => string; me: string }) {
   const t = transfers(balances(items, assign, people, stayers));
   const home = items.filter((it) => assign[it.id] === "piso");
   const sale = saleSplit(items, assign, people);
+  const rows = explain(items, assign, people, stayers);
+  const pay = (x: { from: string; to: string; cents: number }) =>
+    x.from === me ? `Pagas ${formatEuros(x.cents)} a ${nameOf(x.to)}`
+      : x.to === me ? `${nameOf(x.from)} te paga ${formatEuros(x.cents)}`
+      : `${nameOf(x.from)} paga ${formatEuros(x.cents)} a ${nameOf(x.to)}`;
+  const list = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} y ${xs.at(-1)}`);
   return (
     <>
       <div className="rounded-2xl bg-brand px-4 py-4 text-center text-brand-ink">
         <p className="text-sm opacity-90">Para quedar en paz</p>
-        {t.length === 0 ? <p className="text-2xl font-bold">Estáis en paz</p>
-          : t.map((x, i) => <p key={i} className="text-xl font-bold">{nameOf(x.from)} paga {formatEuros(x.cents)} a {nameOf(x.to) === "Tú" ? "ti" : nameOf(x.to)}</p>)}
+        {t.length === 0 ? <p className="text-2xl font-bold">Estáis en paz</p> : t.map((x, i) => <p key={i} className="text-xl font-bold">{pay(x)}</p>)}
       </div>
-      <Card className="divide-y divide-line !p-0">
-        {people.map((u) => {
-          const got = items.filter((it) => assign[it.id] === u);
+      <Card className="space-y-3 !p-4 text-sm">
+        <p className="font-semibold">Por qué</p>
+        {rows.map((r) => {
+          const things = [...r.mine.map((it) => it.name), ...r.fromHome.map((x) => `su parte de ${x.it.name}`)];
           return (
-            <div key={u} className="flex items-baseline justify-between gap-3 px-4 py-2.5">
-              <span className="min-w-0"><b>{nameOf(u)}</b> <span className="text-sm text-muted">se queda {got.length ? got.map((g) => g.name).join(", ") : "nada"}</span></span>
-              <span className="shrink-0 font-semibold tabular-nums">{formatEuros(got.reduce((s, it) => s + it.value_cents, 0))}</span>
-            </div>
+            <p key={r.user}>
+              <b>{nameOf(r.user)}</b>{" "}
+              {things.length ? <>se queda {list(things)} (<b>{formatEuros(r.gets)}</b>).</> : <>no se queda nada.</>}{" "}
+              <span className="text-muted">Por lo que puso, le corresponden {formatEuros(r.due)} de lo que se reparte.</span>{" "}
+              {r.balance >= 100 ? <b>Paga {formatEuros(r.balance)}.</b> : r.balance <= -100 ? <b>Cobra {formatEuros(-r.balance)}.</b> : <b>Queda en paz.</b>}
+            </p>
           );
         })}
         {home.length > 0 && (
-          <div className="flex items-baseline justify-between gap-3 px-4 py-2.5">
-            <span className="min-w-0"><b>Se queda en el piso</b> <span className="text-sm text-muted">{home.map((g) => g.name).join(", ")}</span></span>
-            <span className="shrink-0 font-semibold tabular-nums">{formatEuros(home.reduce((s, it) => s + it.value_cents, 0))}</span>
-          </div>
+          <p><b>Se queda en el piso:</b> {list(home.map((it) => it.name))} ({formatEuros(home.reduce((s, it) => s + it.value_cents, 0))}). Lo pagan {list(stayers.map(nameOf))}, cada uno según lo que puso, y así quien se va recibe su parte.</p>
+        )}
+        {sale.sold.length > 0 && (
+          <p><b>Se vende:</b> {list(sale.sold.map((it) => it.name))} (≈ {formatEuros(sale.total)}). Con lo que se saque, cada uno cobra según lo que puso:{" "}
+            {list(Object.entries(sale.per).filter(([, v]) => v >= 100).map(([u, v]) => `${nameOf(u)} ${formatEuros(Math.round(v))}`)) || "—"}.
+            {" "}Si se vende por más o por menos, se reparte con los mismos %.</p>
         )}
       </Card>
-      {home.length > 0 && (
-        <p className="-mt-2 text-xs text-muted">Lo que se queda en el piso lo pagan los que siguen ({stayers.map(nameOf).join(", ")}), cada uno según lo que puso. Ya está incluido en los pagos de arriba.</p>
-      )}
-      {sale.sold.length > 0 && (
-        <Card className="overflow-x-auto !p-3">
-          <div className="mb-2 flex items-baseline justify-between">
-            <p className="font-semibold">Para vender</p>
-            <p className="font-semibold tabular-nums">≈ {formatEuros(sale.total)}</p>
-          </div>
-          <table className="w-full text-sm">
-            <thead><tr className="text-muted"><th className="py-1 text-left font-medium">Bien</th>{people.map((u) => <th key={u} className="py-1 text-right font-medium">{nameOf(u)}</th>)}</tr></thead>
-            <tbody>
-              {sale.sold.map((it) => (
-                <tr key={it.id} className="border-t border-line">
-                  <td className="py-1.5">{it.name} <span className="text-muted">{formatEuros(it.value_cents)}</span></td>
-                  {people.map((u) => <td key={u} className="text-right tabular-nums">{shareOf(it, u, people) ? formatEuros(Math.round(it.value_cents * shareOf(it, u, people))) : "–"}</td>)}
-                </tr>
-              ))}
-              <tr className="border-t border-line font-semibold"><td className="py-1.5">Total</td>{people.map((u) => <td key={u} className="text-right tabular-nums">{formatEuros(Math.round(sale.per[u] ?? 0))}</td>)}</tr>
-            </tbody>
-          </table>
-          <p className="mt-2 text-xs text-muted">Cada uno cobra según lo que puso en ese objeto. Si se vende por más o por menos, se reparte con los mismos %.</p>
-        </Card>
-      )}
     </>
   );
 }
 
 /* ---------- Cerrado ---------- */
-function Closed({ home, diss, split, people, stayers, nameOf, realName, id, setError }:
-  { home: Household; diss: Dissolution; split: SplitState | null; people: string[]; stayers: string[]; nameOf: (u: string) => string; realName: (u: string) => string; id: string; setError: (e: string) => void }) {
+function Closed({ home, diss, split, people, stayers, nameOf, realName, me, id, setError }:
+  { home: Household; diss: Dissolution; split: SplitState | null; people: string[]; stayers: string[]; nameOf: (u: string) => string; realName: (u: string) => string; me: string; id: string; setError: (e: string) => void }) {
   const [busy, setBusy] = useState(false);
   const accepted = split?.offers.find((o) => o.status === "aceptada") ?? null;
+  const assignment = accepted ? chosenAssignment(accepted) : null;
   const isExit = diss.kind === "parcial";
   const leavers = split?.leavers ?? [];
   const keeperName = (v: string) => (v === "vender" ? "Para vender" : v === "piso" ? "Se queda en el piso" : realName(v));
+  const others = leavers.filter((u) => u !== me).map(realName);
+  const iLeft = leavers.includes(me);
+  const exitText = iLeft
+    ? (others.length ? `${others.join(", ")} y tú habéis salido del piso` : "Has salido del piso")
+    : `${others.join(" y ")} ${others.length > 1 ? "han salido" : "ha salido"} del piso`;
 
   async function finalPdf() {
     setBusy(true);
@@ -585,8 +614,8 @@ function Closed({ home, diss, split, people, stayers, nameOf, realName, id, setE
       const r = await loadReport(id);
       const { buildPdf, pdfFileName } = await import("@/lib/pdf");
       let splitPdf;
-      if (split && accepted) {
-        const a = accepted.assignment;
+      if (split && assignment) {
+        const a = assignment;
         const sale = saleSplit(split.items, a, people);
         splitPdf = {
           rows: split.items.map((it) => ({ name: it.name, price: it.price_cents, value: it.value_cents, keeper: keeperName(a[it.id]) })),
@@ -607,7 +636,7 @@ function Closed({ home, diss, split, people, stayers, nameOf, realName, id, setE
         <p className="text-4xl">🤝</p>
         {isExit ? (
           <>
-            <p className="text-lg font-semibold">{leavers.map(nameOf).join(" y ")} {leavers.length > 1 ? "salieron" : "salió"} del piso</p>
+            <p className="text-lg font-semibold">{exitText}</p>
             {diss.completed_at && <p className="text-sm text-muted">El {formatDateTime(diss.completed_at)}.</p>}
           </>
         ) : (
@@ -617,7 +646,17 @@ function Closed({ home, diss, split, people, stayers, nameOf, realName, id, setE
           </>
         )}
       </Card>
-      {split && accepted && <SplitSummary items={split.items} assign={accepted.assignment} people={people} stayers={stayers} nameOf={nameOf} />}
+      {split && assignment && <SplitSummary items={split.items} assign={assignment} people={people} stayers={stayers} nameOf={nameOf} me={me} />}
+      {split && assignment && (
+        <Card className="divide-y divide-line !p-0 text-sm">
+          {split.items.map((it) => (
+            <div key={it.id} className="flex items-baseline justify-between gap-2 px-4 py-2.5">
+              <span className="truncate">{it.name} <span className="text-muted">{formatEuros(it.value_cents)}</span></span>
+              <span className="shrink-0 font-semibold">{keeperLabel(assignment[it.id], nameOf)}</span>
+            </div>
+          ))}
+        </Card>
+      )}
       <Button onClick={finalPdf} disabled={busy}>{busy ? "Preparando…" : isExit ? "📄 Descargar PDF de la salida" : "📄 Descargar PDF final"}</Button>
     </div>
   );
