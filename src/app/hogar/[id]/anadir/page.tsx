@@ -35,7 +35,9 @@ export default function AnadirBienPage() {
 
 function AnadirBien() {
   const { id } = useParams<{ id: string }>();
-  const editId = useSearchParams().get("editar");
+  const sp = useSearchParams();
+  const editId = sp.get("editar");
+  const reparto = editId ? null : sp.get("reparto");
   const [existing, setExisting] = useState<{ receipt: string | null; photo: string | null }>({ receipt: null, photo: null });
   const router = useRouter();
   const user = useRequireUser();
@@ -46,6 +48,7 @@ function AnadirBien() {
   const [date, setDate] = useState(today());
   const [isPrivate, setIsPrivate] = useState(false);
   const [category, setCategory] = useState("");
+  const [otherCat, setOtherCat] = useState("");
   const [viewers, setViewers] = useState<Set<string>>(new Set());
   const [receipt, setReceipt] = useState<File | null>(null);
   const [photo, setPhoto] = useState<File | null>(null);
@@ -97,7 +100,8 @@ function AnadirBien() {
             if (error || !a) { setError("No se pudo cargar el bien para editarlo"); setRows([]); return; }
             setName(a.name); setPrice(centsToInput(a.total_cents)); setDate(a.purchase_date);
             setIsPrivate(a.visibility === "implicados");
-            setCategory(a.category ?? "");
+            if (a.category && !(CATEGORIES as readonly string[]).includes(a.category)) { setCategory("Otros"); setOtherCat(a.category); }
+            else setCategory(a.category ?? "");
             db.from("asset_viewers").select("user_id").eq("asset_id", editId)
               .then(({ data: v }) => setViewers(new Set(((v ?? []) as { user_id: string }[]).map((x) => x.user_id))));
             setExisting({ receipt: a.receipt_path, photo: a.photo_path });
@@ -163,13 +167,15 @@ function AnadirBien() {
       const common = {
         p_name: name, p_total_cents: total, p_purchase_date: date, p_shares: shares,
         p_visibility: isPrivate && involved.length >= 2 ? "implicados" : "hogar", p_receipt_path: receiptPath, p_photo_path: photoPath,
-        p_category: category || null,
+        p_category: category === "Otros" ? otherCat.trim() || "Otros" : category || null,
       };
       let assetId: string | null = null;
       if (hasDown) {
         const { data, error } = editId
           ? await supabase().rpc("update_asset", { p_asset: editId, ...common })
-          : await supabase().rpc("create_asset", { p_household: id, ...common });
+          : reparto
+            ? await supabase().rpc("dissolution_add_missing", { p_dissolution: reparto, ...common })
+            : await supabase().rpc("create_asset", { p_household: id, ...common });
         if (error) throw error;
         assetId = editId ?? (data as string);
         if (isPrivate && involved.length >= 2) {
@@ -185,7 +191,7 @@ function AnadirBien() {
         });
         if (error) throw assetId ? new Error(`Se guardó ${name.trim()}, pero no el pago periódico: ${errorText(error)}`) : error;
       }
-      router.replace(editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`);
+      router.replace(editId ? `/hogar/${id}/bien/${editId}` : reparto ? `/hogar/${id}/disolver` : `/hogar/${id}`);
     } catch (err) {
       setError(errorText(err));
       setBusy(false);
@@ -197,7 +203,12 @@ function AnadirBien() {
 
   return (
     <main>
-      <Link href={editId ? `/hogar/${id}/bien/${editId}` : `/hogar/${id}`} className="mb-4 inline-block py-2 text-sm font-medium text-muted">‹ Volver</Link>
+      <Link href={editId ? `/hogar/${id}/bien/${editId}` : reparto ? `/hogar/${id}/disolver` : `/hogar/${id}`} className="mb-4 inline-block py-2 text-sm font-medium text-muted">‹ Volver</Link>
+      {reparto && (
+        <p className="mb-4 rounded-xl bg-warn-bg px-4 py-3 text-sm text-warn">
+          <b>Falta algo en el reparto.</b> El reparto sigue en marcha. Cuando los demás confirmen esto, entra en el reparto y habrá que ponerle valor y volver a elegir (lo que ya elegiste se queda marcado).
+        </p>
+      )}
       <form onSubmit={save} className="space-y-5">
         <Field label="¿Qué es?" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120}
           placeholder="Sofá, nevera, coche, alquiler…" autoFocus />
@@ -209,8 +220,12 @@ function AnadirBien() {
             {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </label>
+        {category === "Otros" && (
+          <Field label="¿Qué tipo es?" value={otherCat} onChange={(e) => setOtherCat(e.target.value)} maxLength={40}
+            placeholder="Ej. Instrumento, bicicleta, herramienta…" />
+        )}
 
-        {!editId && (
+        {!editId && !reparto && (
           <section className="rounded-2xl border border-line bg-card p-4">
             <label className="flex items-start gap-3">
               <input type="checkbox" checked={repeats} onChange={(e) => setRepeats(e.target.checked)}
@@ -236,9 +251,10 @@ function AnadirBien() {
                   <Field label="Primer pago" type="date" value={start} onChange={(e) => setStart(e.target.value)} />
                   <div>
                     <span className="mb-1 block text-sm font-medium text-muted">¿Cuántas cuotas?</span>
-                    <input value={endless ? "" : count} onChange={(e) => setCount(e.target.value)} disabled={endless} inputMode="numeric"
-                      placeholder="Ej. 48" aria-label="Número de cuotas"
-                      className="w-full rounded-xl border border-line bg-bg px-4 py-3 outline-none focus:border-brand disabled:opacity-40" />
+                    <input value={endless ? "" : count} onChange={(e) => setCount(e.target.value)} disabled={endless} required={!endless} inputMode="numeric"
+                      placeholder="Ej. 48" aria-label="Número de cuotas" aria-invalid={!countOk}
+                      className={`w-full rounded-xl border bg-bg px-4 py-3 outline-none focus:border-brand disabled:opacity-40 ${!countOk ? "border-bad" : "border-line"}`} />
+                    {!countOk && <p className="mt-1 text-xs font-medium text-bad">Obligatorio: pon cuántas cuotas o marca «Sin fin»</p>}
                     <label className="mt-1.5 flex items-center gap-2 text-sm">
                       <input type="checkbox" checked={endless} onChange={(e) => setEndless(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                       Sin fin

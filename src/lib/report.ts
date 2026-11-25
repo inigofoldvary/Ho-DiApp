@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 
 export type ReportAsset = {
   id: string; name: string; total_cents: number; purchase_date: string; status: string; version: number;
-  receipt_path: string | null;
+  receipt_path: string | null; category: string | null;
   participants: { user_id: string; name: string; amount_cents: number }[];
   confirmations: { name: string; at: string }[];
 };
@@ -24,7 +24,7 @@ export async function loadReport(householdId: string): Promise<Report> {
   const [h, m, a, c, i] = await Promise.all([
     db.from("households").select("name, kind, status").eq("id", householdId).single(),
     db.from("household_members").select("user_id, profiles(display_name)").eq("household_id", householdId),
-    db.from("assets").select("id, name, total_cents, purchase_date, status, version, receipt_path, asset_participants(user_id, amount_cents)")
+    db.from("assets").select("id, name, total_cents, purchase_date, status, version, receipt_path, category, asset_participants(user_id, amount_cents)")
       .eq("household_id", householdId).order("purchase_date"),
     db.from("confirmations").select("subject_type, subject_id, subject_version, user_id, decision, created_at")
       .eq("household_id", householdId).eq("decision", "confirmar").order("created_at"),
@@ -42,7 +42,7 @@ export async function loadReport(householdId: string): Promise<Report> {
   const confs = (c.data ?? []) as { subject_type: string; subject_id: string; subject_version: number; user_id: string; created_at: string }[];
 
   const assets: ReportAsset[] = ((a.data ?? []) as unknown as {
-    id: string; name: string; total_cents: number; purchase_date: string; status: string; version: number; receipt_path: string | null;
+    id: string; name: string; total_cents: number; purchase_date: string; status: string; version: number; receipt_path: string | null; category: string | null;
     asset_participants: { user_id: string; amount_cents: number }[];
   }[]).map((x) => ({
     ...x,

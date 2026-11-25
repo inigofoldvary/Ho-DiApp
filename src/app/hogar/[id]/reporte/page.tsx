@@ -14,6 +14,7 @@ export default function Reporte() {
   const [r, setR] = useState<Report | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [cat, setCat] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -38,7 +39,11 @@ export default function Reporte() {
 
   const totalConfirmed = r.people.reduce((s, p) => s + p.assets + p.recurring, 0);
   const totalPending = r.people.reduce((s, p) => s + p.pending, 0);
-  const confirmed = r.assets.filter((a) => a.status === "confirmado");
+  const allConfirmed = r.assets.filter((a) => a.status === "confirmado");
+  const catOf = (a: { category: string | null }) => a.category || "Sin tipo";
+  const cats = [...new Set(allConfirmed.map(catOf))].sort((x, y) => (x === "Sin tipo" ? 1 : y === "Sin tipo" ? -1 : x.localeCompare(y, "es")));
+  const confirmed = cat ? allConfirmed.filter((a) => catOf(a) === cat) : allConfirmed;
+  const catTotal = confirmed.reduce((s, a) => s + a.total_cents, 0);
   const maxPerson = Math.max(1, ...r.people.map((p) => p.assets + p.recurring));
 
   return (
@@ -72,7 +77,17 @@ export default function Reporte() {
         })}
       </Card>
 
-      <h2 className="mb-2 text-sm font-semibold text-muted">Bienes confirmados ({confirmed.length})</h2>
+      <h2 className="mb-2 text-sm font-semibold text-muted">Bienes confirmados ({confirmed.length}{cat ? ` de ${cat}` : ""} · {formatEuros(catTotal)})</h2>
+      {cats.length > 1 && (
+        <div className="mb-3 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filtrar por tipo">
+          {[null, ...cats].map((c) => (
+            <button key={c ?? "todos"} type="button" onClick={() => setCat(c)} aria-pressed={cat === c}
+              className={`shrink-0 rounded-full border px-3 py-1 text-sm ${cat === c ? "border-brand bg-brand font-semibold text-brand-ink" : "border-line bg-card text-muted"}`}>
+              {c ?? "Todos"}{c ? ` (${allConfirmed.filter((a) => catOf(a) === c).length})` : ""}
+            </button>
+          ))}
+        </div>
+      )}
       {confirmed.length === 0 ? (
         <p className="mb-5 text-sm text-muted">Aún no hay bienes confirmados por todos.</p>
       ) : (
@@ -80,7 +95,7 @@ export default function Reporte() {
           {confirmed.map((a) => (
             <div key={a.id} className="px-4 py-3">
               <div className="flex justify-between gap-2">
-                <span className="font-medium">{a.name}</span>
+                <span className="font-medium">{a.name}{a.category && <span className="ml-2 rounded-full bg-line px-2 py-0.5 text-xs font-normal text-muted">{a.category}</span>}</span>
                 <span className="font-semibold">{formatEuros(a.total_cents)}</span>
               </div>
               <p className="text-xs text-muted">

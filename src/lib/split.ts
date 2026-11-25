@@ -6,7 +6,13 @@ export type SplitItem = {
   value_cents: number;
   paid: Record<string, number>; // céntimos puestos por cada persona (o su % actual si `owned`)
   owned?: boolean;
+  is_private?: boolean;
+  is_set?: boolean;            // alguien ha puesto ya su valor de hoy
+  itemOks?: string[];          // quién ha dado el OK al valor actual
+  deciders?: string[];         // quién decide este bien (privados: los de dentro)
 };
+export type PrivateDeal = { asset_id: string; keeper: string; set_by: string; oks: string[] };
+export type BackRequest = { id: string; from_user: string; reason: string | null; status: string; created_at: string; oks: string[] };
 export type Assignment = Record<string, string>; // asset_id -> user_id | "vender" | "piso" (se queda para los que siguen)
 export type Transfer = { from: string; to: string; cents: number };
 
@@ -36,6 +42,8 @@ export type SplitState = {
   offerOks: Record<string, OfferOk[]>; // offer -> quién la aprueba y qué opción
   valueLog: ValueChange[];     // quién propuso cada valor
   leavers: string[];           // quién se va (en una disolución total, todos)
+  privateDeals: Record<string, PrivateDeal>;
+  back: BackRequest | null;    // petición pendiente de volver al paso 1
 };
 
 /**
@@ -52,8 +60,8 @@ export function shareOf(it: SplitItem, user: string, among?: string[]): number {
 
 export async function loadSplit(householdId: string, diss: Dissolution): Promise<SplitState> {
   const db = supabase();
-  const [v, ok, pd, w, of, lv, vl] = await Promise.all([
-    db.from("dissolution_values").select("asset_id, value_cents, assets(name, total_cents, purchase_date, photo_path, receipt_path, asset_participants(user_id, amount_cents))")
+  const [v, ok, pd, w, of, lv, vl, io, pdl, br] = await Promise.all([
+    db.from("dissolution_values").select("*, assets(name, total_cents, purchase_date, photo_path, receipt_path, visibility, asset_participants(user_id, amount_cents))")
       .eq("dissolution_id", diss.id),
     db.from("dissolution_value_oks").select("user_id").eq("dissolution_id", diss.id).eq("values_version", diss.values_version),
     db.from("dissolution_picks_done").select("user_id").eq("dissolution_id", diss.id),
@@ -61,10 +69,14 @@ export async function loadSplit(householdId: string, diss: Dissolution): Promise
     db.from("dissolution_offers").select("*").eq("dissolution_id", diss.id).order("created_at"),
     db.from("dissolution_leavers").select("user_id").eq("dissolution_id", diss.id),
     db.from("dissolution_value_log").select("asset_id, user_id, old_cents, new_cents, created_at").eq("dissolution_id", diss.id).order("created_at"),
+    db.from("dissolution_item_oks").select("asset_id, user_id, value_cents").eq("dissolution_id", diss.id),
+    db.from("dissolution_private_deals").select("asset_id, keeper, set_by, oks").eq("dissolution_id", diss.id),
+    db.from("dissolution_back_requests").select("id, from_user, reason, status, created_at").eq("dissolution_id", diss.id).eq("status", "pendiente").limit(1),
   ]);
   for (const r of [v, ok, pd, w, of]) if (r.error) throw r.error;
 
-  type Row = { asset_id: string; value_cents: number; assets: { name: string; total_cents: number; purchase_date: string; photo_path: string | null; receipt_path: string | null; asset_participants: { user_id: string; amount_cents: number }[] } | null };
+  type Row = { asset_id: string; value_cents: number; is_set?: boolean; assets: { name: string; total_cents: number; purchase_date: string; photo_path: string | null; receipt_path: string | null; visibility: string; asset_participants: { user_id: string; amount_cents: number }[] } | null };
+  const oksRows = (io.error ? [] : io.data ?? []) as { asset_id: string; user_id: string; value_cents: number }[];
   const rows = ((v.data ?? []) as unknown as Row[]).filter((r) => r.assets);
   const items: SplitItem[] = rows.map((r) => {
     const paid: Record<string, number> = {};
@@ -72,6 +84,9 @@ export async function loadSplit(householdId: string, diss: Dissolution): Promise
     return {
       id: r.asset_id, name: r.assets!.name, price_cents: r.assets!.total_cents, purchase_date: r.assets!.purchase_date,
       photo_path: r.assets!.photo_path, receipt_path: r.assets!.receipt_path, value_cents: r.value_cents, paid,
+      is_private: r.assets!.visibility === "implicados",
+      is_set: r.is_set ?? true,
+      itemOks: oksRows.filter((k) => k.asset_id === r.asset_id && k.value_cents === r.value_cents).map((k) => k.user_id),
     };
   });
 
@@ -98,6 +113,19 @@ export async function loadSplit(householdId: string, diss: Dissolution): Promise
       for (const it of items) if (by[it.id]) { it.paid = by[it.id]; it.owned = true; }
     }
   }
+  // Quién decide cada privado
+  await Promise.all(items.filter((i) => i.is_private).map(async (i) => {
+    const { data } = await db.rpc("asset_insiders", { p_asset: i.id });
+    i.deciders = ((data ?? []) as unknown[]).map((x) => (typeof x === "string" ? x : (x as Record<string, string>).asset_insiders));
+  }));
+  let back: BackRequest | null = null;
+  const b0 = (br.error ? [] : br.data ?? []) as Omit<BackRequest, "oks">[];
+  if (b0.length) {
+    const k = await db.from("dissolution_back_oks").select("user_id").eq("request_id", b0[0].id);
+    back = { ...b0[0], oks: ((k.data ?? []) as { user_id: string }[]).map((x) => x.user_id) };
+  }
+  const privateDeals: Record<string, PrivateDeal> = {};
+  for (const r of (pdl.error ? [] : pdl.data ?? []) as PrivateDeal[]) privateDeals[r.asset_id] = r;
   items.sort((a, b) => b.value_cents - a.value_cents || a.name.localeCompare(b.name));
 
   const wants: Record<string, string[]> = {};
@@ -114,6 +142,7 @@ export async function loadSplit(householdId: string, diss: Dissolution): Promise
     valueOks: ((ok.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
     picksDone: ((pd.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
     wants, offers, offerOks,
+    privateDeals, back,
     valueLog: (vl.error ? [] : (vl.data ?? [])) as ValueChange[],
     leavers: ((lv.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
   };

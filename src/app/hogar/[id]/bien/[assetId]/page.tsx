@@ -106,7 +106,7 @@ export default function Bien() {
   const confirmers = asset.status === "confirmado" && wholeHome
     ? confirmersAll.filter((u) => current.some((c) => c.user_id === u)) : confirmersAll;
   const iConfirm = confirmersAll.includes(user.id);
-  const canAnswer = iConfirm && !myAnswer && !frozen;
+  const canAnswer = iConfirm && !myAnswer && (!frozen || !!(asset as { added_in?: string | null }).added_in);
   const isCreator = asset.created_by === user.id;
   const nameOf = (uid: string, fallback?: string | null) => (uid === user.id ? "Tú" : names[uid] ?? fallback ?? "?");
 
