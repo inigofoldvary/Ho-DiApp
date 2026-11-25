@@ -143,6 +143,17 @@ export default function Hogar() {
         </Link>
       )}
 
+      {members.filter((m) => m.active).length > 0 && (
+        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+          {members.filter((m) => m.active).map((m) => (
+            <Link key={m.user_id} href={`/hogar/${id}/persona/${m.user_id}`}
+              className="flex shrink-0 items-center gap-2 rounded-full border border-line bg-card py-1 pl-1 pr-3 text-sm font-medium">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-logo text-xs font-bold text-white">{m.name.slice(0, 1).toUpperCase()}</span>
+              {m.user_id === user?.id ? "Tú" : m.name}
+            </Link>
+          ))}
+        </div>
+      )}
       <Card className="mb-5 text-center">
         <p className="text-sm text-muted">Total registrado</p>
         <p className="text-3xl font-bold tracking-tight">{formatEuros(total)}</p>

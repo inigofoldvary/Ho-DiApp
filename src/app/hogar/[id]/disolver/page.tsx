@@ -277,8 +277,23 @@ function PhaseValues({ split, people, me, nameOf, urls, busy, call }:
     }
   }
 
+  const myLast = split.valueLog.map((l) => l.user_id).lastIndexOf(me);
+  const news = split.valueLog.slice(myLast + 1).filter((l) => l.user_id && l.user_id !== me).slice(-4);
+  const nameOfItem = (aid: string) => split.items.find((i) => i.id === aid)?.name ?? "algo";
+
   return (
     <>
+      {news.length > 0 && (
+        <div className="rounded-2xl border-2 border-bad bg-bad-bg px-4 py-3 text-sm text-bad">
+          <p className="font-semibold">✏️ Han cambiado valores desde la última vez:</p>
+          <ul className="mt-1 space-y-0.5">
+            {news.map((l, i) => (
+              <li key={i}>{nameOf(l.user_id!)}: {nameOfItem(l.asset_id)} {l.old_cents !== null ? `${formatEuros(l.old_cents)} → ` : ""}<b>{formatEuros(l.new_cents)}</b></li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs">Tienes que volver a dar el OK.</p>
+        </div>
+      )}
       <div>
         <h2 className="text-lg font-semibold">¿Cuánto vale hoy cada cosa?</h2>
         <p className="text-sm text-muted">La app propone un valor (pierde un 15 % por cada año). Cambiadlo si no cuadra: puede valer más o menos de lo que costó. Debajo de cada cosa verás qué precio ha puesto cada uno; en rojo, lo último que ha cambiado otra persona.</p>
@@ -409,12 +424,16 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
   const base: Record<Opt, Assignment> = open
     ? { a: open.assignment, b: open.assignment_b ?? open.assignment }
     : { a: p1, b: p2 };
-  const [tab, setTab] = useState<Opt>("a");
+  // En cuanto alguien (que no la envió) aprueba una opción, la otra queda descartada.
+  const firstPick = open ? oks.find((k) => k.choice && k.user_id !== open.from_user) ?? null : null;
+  const hasB = !open || !!open.assignment_b;
+  const discarded: Opt | null = !hasB ? "b" : firstPick ? (firstPick.choice === "a" ? "b" : "a") : null;
+  const [tab, setTab] = useState<Opt>(firstPick?.choice ?? "a");
   const [draft, setDraft] = useState<Record<Opt, Assignment | null>>({ a: null, b: null });
   const [note, setNote] = useState("");
   const cur: Record<Opt, Assignment> = { a: draft.a ?? base.a, b: draft.b ?? base.b };
   const changedByMe = (o: Opt, itemId: string) => !!draft[o] && draft[o]![itemId] !== base[o][itemId];
-  const anyChange = (["a", "b"] as Opt[]).some((o) => draft[o] && !sameAssignment(draft[o]!, base[o]));
+  const anyChange = (["a", "b"] as Opt[]).some((o) => o !== discarded && draft[o] && !sameAssignment(draft[o]!, base[o]));
   // Cambiado por otra persona respecto a la propuesta anterior
   const prevOf = (o: Opt) => (prev ? (o === "b" ? prev.assignment_b ?? prev.assignment : prev.assignment) : null);
   const changedByOthers = (o: Opt, itemId: string) => !!open && !iSent && !!prevOf(o) && prevOf(o)![itemId] !== base[o][itemId];
@@ -427,7 +446,9 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
     setDraft((d) => ({ ...d, [tab]: { ...cur[tab], [itemId]: order[(order.indexOf(now) + 1) % order.length] } }));
   }
   async function send() {
-    if (await call("dissolution_send_offer", { p_dissolution: split.diss.id, p_assignment: cur.a, p_assignment_b: cur.b, p_note: note })) {
+    const live = discarded ? (discarded === "a" ? cur.b : cur.a) : null;
+    const args = live ? { p_assignment: live, p_assignment_b: null } : { p_assignment: cur.a, p_assignment_b: cur.b };
+    if (await call("dissolution_send_offer", { p_dissolution: split.diss.id, ...args, p_note: note })) {
       setDraft({ a: null, b: null }); setNote("");
     }
   }
@@ -460,8 +481,22 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
     </Card>
   );
 
+  const nChanges = open && prev ? split.items.filter((it) => (["a", "b"] as Opt[]).some((o) => changedByOthers(o, it.id))).length : 0;
+  const pickedBy = firstPick && firstPick.user_id !== me ? firstPick : null;
+
   return (
     <>
+      {open && !iSent && (nChanges > 0 || open.note) && (
+        <div className="rounded-2xl border-2 border-bad bg-bad-bg px-4 py-3 text-sm text-bad">
+          <p className="font-semibold">📩 {nameOf(open.from_user)} {prev ? `te ha devuelto el reparto${nChanges ? ` con ${nChanges} ${nChanges === 1 ? "cambio" : "cambios"} (en rojo abajo)` : ""}` : "ha enviado el reparto"}</p>
+          {open.note && <p className="mt-1 text-base">“{open.note}”</p>}
+        </div>
+      )}
+      {pickedBy && (
+        <div className="rounded-2xl bg-ok-bg px-4 py-3 text-sm text-ok">
+          <p className="font-semibold">✅ {nameOf(pickedBy.user_id)} ha aprobado la {OPT_LABEL[pickedBy.choice!]}. La otra queda descartada.</p>
+        </div>
+      )}
       <div>
         {!open && <><h2 className="text-lg font-semibold">Dos opciones para enviar</h2>
           <p className="text-sm text-muted">La app prepara la A (manda quien más pagó) y la B (se mueve menos dinero). Cámbialas si quieres tocando un objeto, y envía las dos.</p></>}
@@ -474,11 +509,11 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
 
       <div className="grid grid-cols-2 gap-2">
         {(["a", "b"] as Opt[]).map((o) => (
-          <button key={o} type="button" onClick={() => setTab(o)} aria-pressed={tab === o}
-            className={`rounded-xl border-2 bg-card px-3 py-2 text-left text-sm font-semibold ${tab === o ? "border-brand bg-ok-bg" : "border-line"}`}>
+          <button key={o} type="button" onClick={() => setTab(o)} aria-pressed={tab === o} disabled={o === discarded}
+            className={`rounded-xl border-2 bg-card px-3 py-2 text-left text-sm font-semibold disabled:opacity-40 ${tab === o ? "border-brand bg-ok-bg" : "border-line"}`}>
             {OPT_LABEL[o]}
             <span className="block text-xs font-normal text-muted">
-              {split.items.some((it) => changedByOthers(o, it.id)) ? <span className="text-bad">Con cambios de otros</span>
+              {o === discarded ? (hasB ? "Descartada" : "Esta vez solo hay una") : split.items.some((it) => changedByOthers(o, it.id)) ? <span className="text-bad">Con cambios de otros</span>
                 : !open ? (o === "a" ? "Manda quien más pagó" : "Se mueve menos dinero") : "Toca para verla"}
             </span>
           </button>
@@ -508,8 +543,8 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
                   );
                 })}
               </div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {(["a", "b"] as Opt[]).map((o) => {
+              <div className={`mt-2 grid gap-2 ${discarded ? "grid-cols-1" : "grid-cols-2"}`}>
+                {(["a", "b"] as Opt[]).filter((o) => o !== discarded).map((o) => {
                   const v = cur[o][it.id] ?? nobody;
                   const mineChanged = changedByMe(o, it.id);
                   const othersChanged = changedByOthers(o, it.id);
@@ -540,7 +575,7 @@ function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
           <Button disabled={busy} onClick={send}>Devolver con cambios</Button>
         </div>
       ) : (
-        <Button disabled={busy || myOk?.choice === tab} onClick={() => call("dissolution_accept_offer", { p_offer: open.id, p_choice: tab })}>
+        <Button disabled={busy || myOk?.choice === tab || tab === discarded} onClick={() => call("dissolution_accept_offer", { p_offer: open.id, p_choice: tab })}>
           {myOk?.choice === tab ? `Ya apruebas la ${OPT_LABEL[tab]} ✓` : `Aprobar la ${OPT_LABEL[tab]} ✓`}
         </Button>
       ))}
