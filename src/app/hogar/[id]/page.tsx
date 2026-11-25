@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros } from "@/lib/money";
-import { signedUrls } from "@/lib/photos";
+import { signedUrls, thumbPath } from "@/lib/photos";
 import { STATUS, formatDateTime, formatMonth } from "@/lib/status";
 import { perFreq } from "@/lib/frequency";
 import { loadMembers, type Member } from "@/lib/members";
@@ -41,6 +41,7 @@ export default function Hogar() {
   const [dues, setDues] = useState<PendingRow[]>([]);
   const [busy, setBusy] = useState("");
   const [goneValues, setGoneValues] = useState<Record<string, number>>({});
+  const [removing, setRemoving] = useState<Set<string>>(new Set());
   const [owners, setOwners] = useState<Record<string, { user_id: string; share: number }[]>>({});
   const [pastExits, setPastExits] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
@@ -92,7 +93,9 @@ export default function Hogar() {
             for (const r of (ow ?? []) as { asset_id: string; user_id: string; share: number }[]) (by[r.asset_id] ??= []).push({ user_id: r.user_id, share: Number(r.share) });
             setOwners(by);
           });
-        signedUrls(list.map((a) => a.photo_path ?? a.receipt_path ?? "")).then(setUrls);
+        signedUrls(list.map(thumbPath)).then(setUrls);
+        if (list.length) db.from("asset_removals").select("asset_id").eq("status", "pendiente").in("asset_id", list.map((a) => a.id))
+          .then(({ data: rm }) => setRemoving(new Set(((rm ?? []) as { asset_id: string }[]).map((r) => r.asset_id))));
         const gone = list.filter((a) => a.gone_dissolution);
         if (gone.length) db.from("dissolution_values").select("asset_id, dissolution_id, value_cents").in("asset_id", gone.map((a) => a.id))
           .then(({ data: dv }) => {
@@ -108,7 +111,7 @@ export default function Hogar() {
   if (!home) return <Loading />;
   // Tras un reparto, lo que se quedó alguien (se vaya o no) sale del hogar y pasa al historial.
   // Lo que era para vender se queda en gris, por si al final no se vende y se reactiva.
-  const isPast = (a: Asset) => a.gone_reason === "llevado" || a.gone_reason === "propio";
+  const isPast = (a: Asset) => a.gone_reason === "llevado" || a.gone_reason === "propio" || a.gone_reason === "baja";
   const current = assets.filter((a) => !isPast(a));
   const past = assets.filter(isPast);
   const total = current.filter((a) => a.gone_reason !== "vendido").reduce((s, a) => s + a.total_cents, 0);
@@ -217,9 +220,9 @@ export default function Hogar() {
                 <Link href={`/hogar/${id}/bien/${a.id}`} className="block">
                 <Card className={`flex gap-3 ${pending.has(a.id) ? "!border-warn" : ""} ${a.gone_reason === "vendido" ? "opacity-50 grayscale" : ""}`}>
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-bg text-2xl">
-                    {urls[a.photo_path ?? a.receipt_path ?? ""]
+                    {urls[thumbPath(a)]
                       // eslint-disable-next-line @next/next/no-img-element
-                      ? <img src={urls[a.photo_path ?? a.receipt_path ?? ""]} alt="" className="h-full w-full object-cover" />
+                      ? <img src={urls[thumbPath(a)]} alt="" className="h-full w-full object-cover" />
                       : "📦"}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -231,9 +234,10 @@ export default function Hogar() {
                     <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-medium">
                       <span className={`rounded-full px-2 py-0.5 ${st.cls}`}>{st.text}</span>
                       {a.category && <span className="rounded-full bg-line px-2 py-0.5 text-muted">{a.category}</span>}
+                      {removing.has(a.id) && <span className="rounded-full bg-warn px-2 py-0.5 text-white">Piden darlo de baja</span>}
                       {a.gone_reason === "vendido" && (
                         <span className="rounded-full bg-ink px-2 py-0.5 text-bg">Para vender · no cuenta · toca para reactivar</span>)}
-                      {!a.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin ticket</span>}
+                      {!a.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin adjunto</span>}
                       {pending.has(a.id) && <span className="rounded-full bg-warn px-2 py-0.5 text-white">Te toca confirmar</span>}
                       {plansOf(a.id).map((p) => (
                         <span key={p.id} className={`rounded-full px-2 py-0.5 ${pendingPlans.has(p.id) ? "bg-warn text-white" : "bg-line text-muted"}`}>
@@ -264,7 +268,8 @@ export default function Hogar() {
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{a.name}</span>
                         <span className="block text-xs text-muted">
-                          {a.gone_to === user?.id ? (a.gone_reason === "llevado" ? "Te lo llevaste" : "Te lo quedaste")
+                          {a.gone_reason === "baja" ? "Dado de baja"
+                            : a.gone_to === user?.id ? (a.gone_reason === "llevado" ? "Te lo llevaste" : "Te lo quedaste")
                             : `${a.gone_reason === "llevado" ? "Se lo llevó" : "Se lo quedó"} ${nameOf(a.gone_to)}`}
                           {goneValues[a.id] !== undefined ? ` por ${formatEuros(goneValues[a.id])}` : ""}
                           {a.gone_at ? ` · ${new Date(a.gone_at).toLocaleDateString("es-ES")}` : ""}
@@ -288,8 +293,9 @@ export default function Hogar() {
       {canEdit && (
         <div className="mt-10 space-y-3">
           <Link href={`/hogar/${id}/disolver`} className="block">
-            <Button variant="secondary" className="!text-bad">{home.kind === "pareja" ? "Disolver este hogar" : "Alguien se va / disolver el piso"}</Button>
+            <Button className="!bg-bad !text-white">⚖️ Repartir y disolver</Button>
           </Link>
+          <p className="text-center text-xs text-muted">Cuando alguien se va del hogar, o cuando os separáis todos. Nada cambia hasta que estéis de acuerdo.</p>
         </div>
       )}
     </main>

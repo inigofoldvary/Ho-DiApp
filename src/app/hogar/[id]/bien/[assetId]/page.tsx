@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase, errorText } from "@/lib/supabase";
 import { useRequireUser } from "@/lib/useSession";
 import { formatEuros } from "@/lib/money";
-import { signedUrls } from "@/lib/photos";
+import { isPdf, signedUrls } from "@/lib/photos";
 import { STATUS, formatDate, formatDateTime } from "@/lib/status";
 import { perFreq } from "@/lib/frequency";
 import { parseEuros } from "@/lib/money";
@@ -124,15 +124,26 @@ export default function Bien() {
           className="fixed inset-0 z-50 flex flex-col bg-black/95">
           <button type="button" onClick={() => setZoom(null)}
             className="m-3 self-start rounded-full bg-white/15 px-4 py-2 text-sm font-medium text-white">‹ Volver</button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={zoom} alt="" className="min-h-0 flex-1 object-contain p-2" />
+          {zoom === urls[asset.receipt_path ?? ""] && isPdf(asset.receipt_path) ? (
+            <>
+              <iframe src={zoom} title="Documento adjunto" className="min-h-0 w-full flex-1 bg-white" onClick={(e) => e.stopPropagation()} />
+              <a href={zoom} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="m-3 self-center text-sm text-white underline">Si no se ve bien, ábrelo aquí</a>
+            </>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={zoom} alt="" className="min-h-0 flex-1 object-contain p-2" />
+          )}
         </div>
       )}
 
       {(urls[asset.photo_path ?? ""] || urls[asset.receipt_path ?? ""]) && (
         <div className="mb-4 grid grid-cols-2 gap-3">
-          {[["Objeto", asset.photo_path], ["Ticket", asset.receipt_path]].map(([label, p]) =>
-            p && urls[p] ? (
+          {[["Objeto", asset.photo_path], ["Adjunto", asset.receipt_path]].map(([label, p]) =>
+            p && urls[p] && isPdf(p) ? (
+              <button type="button" key={label} onClick={() => setZoom(urls[p])} className="flex aspect-square flex-col items-center justify-center gap-1 rounded-2xl bg-card text-sm">
+                <span className="text-4xl">📄</span><span className="font-medium">Ver documento (PDF)</span>
+              </button>
+            ) : p && urls[p] ? (
               <button type="button" key={label} onClick={() => setZoom(urls[p])} className="relative block aspect-square overflow-hidden rounded-2xl bg-card">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={urls[p]} alt={label!} className="h-full w-full object-cover" />
@@ -147,7 +158,8 @@ export default function Bien() {
         <p className="text-sm text-muted">Comprado el {formatDate(asset.purchase_date)}</p>
         {asset.gone_reason && (
           <p className="mt-2 rounded-xl bg-line/60 px-3 py-2 text-sm">
-            {asset.gone_reason === "vendido" ? "En el reparto se decidió venderlo. No cuenta en el hogar mientras no se reactive."
+            {asset.gone_reason === "baja" ? "Dado de baja de acuerdo entre todos. Ya no está en el hogar (el motivo, abajo)."
+              : asset.gone_reason === "vendido" ? "En el reparto se decidió venderlo. No cuenta en el hogar mientras no se reactive."
               : `${asset.gone_to === user.id ? (asset.gone_reason === "llevado" ? "Te lo llevaste" : "Te lo quedaste") : `${asset.gone_reason === "llevado" ? "Se lo llevó" : "Se lo quedó"} ${names[asset.gone_to ?? ""] ?? "alguien"}`}${goneValue !== null ? ` por ${formatEuros(goneValue)}` : ""} en el reparto. Ya no está en el hogar.`}
             {asset.gone_at && <span className="block text-xs text-muted">{formatDate(asset.gone_at.slice(0, 10))}</span>}
           </p>
@@ -157,7 +169,7 @@ export default function Bien() {
         )}
         <div className="mt-3 flex flex-wrap gap-1.5 text-xs font-medium">
           <span className={`rounded-full px-2 py-0.5 ${st.cls}`}>{st.text}</span>
-          {!asset.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin ticket</span>}
+          {!asset.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin adjunto</span>}
           {asset.visibility === "implicados" && <span className="rounded-full bg-line px-2 py-0.5 text-muted">🔒 Privado</span>}
           {asset.version > 1 && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Editado</span>}
         </div>
@@ -205,6 +217,8 @@ export default function Bien() {
       {asset.gone_reason === "vendido" && !frozen && active.includes(user.id) && (
         <Reactivate asset={asset} me={user.id} names={names} active={active} onDone={load} />
       )}
+
+      <Removal asset={asset} me={user.id} names={names} frozen={frozen} onDone={load} />
 
       <Ownership asset={asset} me={user!.id} names={names} active={active} frozen={frozen || !!asset.gone_reason} />
 
@@ -465,5 +479,112 @@ function Reactivate({ asset, me, names, active, onDone }:
         <Button disabled={!ok || busy} onClick={save}>{busy ? "Guardando…" : "Reactivar"}</Button>
       </div>
     </Card>
+  );
+}
+
+/* Dar de baja (se rompió, se perdió…): lo tienen que aceptar todos */
+type RemovalRow = { id: string; requested_by: string; reason: string; status: string; created_at: string; decided_at: string | null };
+type RemovalAnswer = { removal_id: string; user_id: string; accept: boolean; comment: string | null };
+function Removal({ asset, me, names, frozen, onDone }:
+  { asset: Asset; me: string; names: Record<string, string>; frozen: boolean; onDone: () => void }) {
+  const [rows, setRows] = useState<RemovalRow[]>([]);
+  const [answers, setAnswers] = useState<RemovalAnswer[]>([]);
+  const [deciders, setDeciders] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [saying, setSaying] = useState<"no" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const reload = useCallback(async () => {
+    const db = supabase();
+    const [r, d] = await Promise.all([
+      db.from("asset_removals").select("id, requested_by, reason, status, created_at, decided_at").eq("asset_id", asset.id).order("created_at", { ascending: false }),
+      db.rpc("asset_removal_deciders", { p_asset: asset.id }),
+    ]);
+    const list = (r.data ?? []) as RemovalRow[];
+    setRows(list);
+    setDeciders(((d.data ?? []) as unknown[]).map((x) => (typeof x === "string" ? x : (x as { asset_removal_deciders: string }).asset_removal_deciders)));
+    if (list.length) {
+      const { data } = await db.from("asset_removal_answers").select("removal_id, user_id, accept, comment").in("removal_id", list.map((x) => x.id));
+      setAnswers((data ?? []) as RemovalAnswer[]);
+    }
+  }, [asset.id]);
+  useEffect(() => { reload(); }, [reload, asset.version, asset.gone_reason]);
+  async function run(fn: string, args: Record<string, unknown>) {
+    setBusy(true); setError("");
+    const { error } = await supabase().rpc(fn, args);
+    setBusy(false);
+    if (error) { setError(errorText(error)); return false; }
+    setOpen(false); setSaying(null); setText("");
+    await reload(); onDone();
+    return true;
+  }
+  const who = (u: string) => (u === me ? "Tú" : names[u] ?? "?");
+  const pending = rows.find((r) => r.status === "pendiente");
+  const done = rows.find((r) => r.status === "aceptada");
+  const lastNo = rows.find((r) => r.status === "rechazada");
+  const ans = (rid: string, u: string) => answers.find((a) => a.removal_id === rid && a.user_id === u);
+
+  if (done) return (
+    <Card className="mb-4 text-sm">
+      <p className="font-semibold">🗑️ Dado de baja</p>
+      <p className="mt-1">“{done.reason}” · lo pidió {who(done.requested_by)}{done.decided_at ? ` · aceptado el ${formatDate(done.decided_at.slice(0, 10))}` : ""}</p>
+    </Card>
+  );
+  if (pending) {
+    const mine = ans(pending.id, me);
+    const iDecide = deciders.includes(me);
+    return (
+      <div className="mb-4 rounded-2xl border-2 border-warn bg-warn-bg px-4 py-3 text-sm text-warn">
+        <p className="font-semibold">🗑️ {pending.requested_by === me ? "Has pedido" : `${who(pending.requested_by)} pide`} dar esto de baja</p>
+        <p className="mt-1 text-base">“{pending.reason}”</p>
+        <p className="mt-1 text-xs">Se da de baja cuando lo aceptáis todos: {deciders.map((u) => `${who(u)} ${ans(pending.id, u)?.accept ? "✓" : "⏳"}`).join(" · ")}</p>
+        {error && <div className="mt-2"><ErrorBox>{error}</ErrorBox></div>}
+        {!frozen && iDecide && !mine && (saying === "no" ? (
+          <div className="mt-2 space-y-2">
+            <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} autoFocus placeholder="¿Por qué no? Ej. se puede arreglar"
+              className="w-full rounded-xl border border-line bg-card px-3 py-2 text-ink outline-none focus:border-brand" />
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={() => setSaying(null)}>Cancelar</Button>
+              <Button className="!bg-bad" disabled={busy || !text.trim()} onClick={() => run("answer_asset_removal", { p_removal: pending.id, p_accept: false, p_comment: text })}>No estoy de acuerdo</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Button variant="secondary" disabled={busy} onClick={() => setSaying("no")}>No</Button>
+            <Button disabled={busy} onClick={() => run("answer_asset_removal", { p_removal: pending.id, p_accept: true })}>Sí, darlo de baja</Button>
+          </div>
+        ))}
+        {pending.requested_by === me && (
+          <button type="button" disabled={busy} onClick={() => run("withdraw_asset_removal", { p_removal: pending.id })} className="mt-2 text-xs font-semibold underline">Retirar la petición</button>
+        )}
+      </div>
+    );
+  }
+  if (frozen || asset.gone_reason || asset.status !== "confirmado" || !deciders.includes(me)) return null;
+  return (
+    <div className="mb-4">
+      {lastNo && (
+        <p className="mb-2 rounded-xl bg-line/60 px-3 py-2 text-xs text-muted">
+          La última petición de baja (“{lastNo.reason}”) no salió adelante
+          {answers.filter((a) => a.removal_id === lastNo.id && !a.accept).map((a) => `: ${who(a.user_id)} dijo “${a.comment ?? "no"}”`).join("")}.
+        </p>
+      )}
+      {!open ? (
+        <Button variant="secondary" onClick={() => setOpen(true)}>🗑️ Dar de baja (se rompió, se perdió…)</Button>
+      ) : (
+        <Card className="space-y-2">
+          <p className="font-semibold">Dar de baja</p>
+          <p className="text-sm text-muted">Se lo pediremos a todos. Cuando todos acepten, saldrá del hogar y quedará en el historial.</p>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} autoFocus placeholder="¿Qué ha pasado? Ej. la tele se rompió y no tiene arreglo"
+            className="w-full rounded-xl border border-line bg-bg px-3 py-2 outline-none focus:border-brand" />
+          {error && <ErrorBox>{error}</ErrorBox>}
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="secondary" onClick={() => setOpen(false)}>Cancelar</Button>
+            <Button disabled={busy || !text.trim()} onClick={() => run("request_asset_removal", { p_asset: asset.id, p_reason: text })}>Pedir la baja</Button>
+          </div>
+        </Card>
+      )}
+    </div>
   );
 }

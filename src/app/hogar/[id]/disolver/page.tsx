@@ -7,7 +7,7 @@ import { loadMembers, type Member } from "@/lib/members";
 import { loadReport } from "@/lib/report";
 import { formatEuros, parseEuros } from "@/lib/money";
 import { formatDateTime } from "@/lib/status";
-import { signedUrls } from "@/lib/photos";
+import { signedUrls, thumbPath } from "@/lib/photos";
 import {
   loadSplit, proposalBalanced, proposalByPaid, balances, transfers, saleSplit, shareOf, sameAssignment, explain, chosenAssignment,
   type Assignment, type Dissolution, type SplitState, type SplitItem, type Offer,
@@ -80,7 +80,7 @@ export default function Disolver() {
       setAdded(ad.error ? [] : (ad.data as { id: string; name: string; status: string }[]));
       setConfs((c.data as Conf[]) ?? []);
       setSplit(s);
-      if (s) signedUrls(s.items.map((it) => it.photo_path ?? it.receipt_path ?? "")).then(setUrls);
+      if (s) signedUrls(s.items.map(thumbPath)).then(setUrls);
     } else {
       setSplit(null);
     }
@@ -242,7 +242,7 @@ export default function Disolver() {
 type CallFn = (fn: string, args: Record<string, unknown>) => Promise<boolean>;
 
 function Thumb({ it, urls, big = false }: { it: SplitItem; urls: Record<string, string>; big?: boolean }) {
-  const src = urls[it.photo_path ?? it.receipt_path ?? ""];
+  const src = urls[thumbPath(it)];
   return (
     <div className={`flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-bg ${big ? "h-24 w-full text-4xl" : "h-12 w-12 text-2xl"}`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}

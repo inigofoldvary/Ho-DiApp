@@ -40,7 +40,7 @@ export default function Persona() {
         const out: Row[] = [];
         for (const a of list) {
           if (a.status !== "confirmado") continue;
-          if (a.gone_reason === "vendido") continue;
+          if (a.gone_reason === "vendido" || a.gone_reason === "baja") continue;
           if ((a.gone_reason === "llevado" || a.gone_reason === "propio") && a.gone_to !== userId) continue;
           let share: number;
           if (a.gone_reason) share = 1;

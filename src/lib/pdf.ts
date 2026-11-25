@@ -115,7 +115,7 @@ export function buildPdf(r: Report, opts: { final?: boolean; leaving?: { user_id
     startY: y + 3,
     head: [["Bien", "Fecha", "Precio", "Quién pagó", "Confirmado por"]],
     body: confirmed.map((a) => [
-      a.name + (a.receipt_path ? "" : "\n(sin ticket)"),
+      a.name + (a.receipt_path ? "" : "\n(sin adjunto)"),
       fmtDate(a.purchase_date),
       eur(a.total_cents),
       a.participants.filter((p) => p.amount_cents > 0).map((p) => `${p.name}: ${eur(p.amount_cents)}`).join("\n"),

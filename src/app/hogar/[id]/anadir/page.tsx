@@ -67,7 +67,7 @@ function AnadirBien() {
   async function pickReceipt(f: File | null) {
     setReceipt(f);
     setOcr(null);
-    if (!f) return;
+    if (!f || !f.type.startsWith("image/")) return;
     setOcr({ state: "leyendo" });
     try {
       const { readTicket } = await import("@/lib/ticket");
@@ -314,7 +314,8 @@ function AnadirBien() {
         </section>
 
         <section className="grid grid-cols-2 gap-3">
-          <PhotoPicker label={existing.receipt && !receipt ? "Ticket guardado ✓ (toca para cambiar)" : "Foto del ticket"} file={receipt} onChange={pickReceipt} />
+          <PhotoPicker label={existing.receipt && !receipt ? "Adjunto guardado ✓ (toca para cambiar)" : "Archivo adjunto"}
+            hint="Ticket, factura o documento (foto o PDF)" icon="📎" accept="image/*,application/pdf" file={receipt} onChange={pickReceipt} />
           <PhotoPicker label={existing.photo && !photo ? "Foto guardada ✓ (toca para cambiar)" : "Foto del objeto"} file={photo} onChange={setPhoto} />
         </section>
         {ocr && (
@@ -324,7 +325,7 @@ function AnadirBien() {
               : "📄 No he podido leer el ticket. Rellénalo a mano."}
           </p>
         )}
-        {!receipt && !existing.receipt && <p className="-mt-3 text-xs text-muted">El ticket es opcional, pero recomendable. Si no lo pones, saldrá como “sin ticket”.</p>}
+        {!receipt && !existing.receipt && <p className="-mt-3 text-xs text-muted">El adjunto es opcional, pero recomendable: sirve para demostrar lo que costó. Si es una foto del ticket, la app intenta leer el total y la fecha.</p>}
         </>}
 
         {isPiso && (() => { const people = repeats ? feeCheck.involved.length : involved.length; return (
@@ -367,20 +368,28 @@ function AnadirBien() {
   );
 }
 
-function PhotoPicker({ label, file, onChange }: { label: string; file: File | null; onChange: (f: File | null) => void }) {
-  const preview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+function PhotoPicker({ label, file, onChange, hint, icon = "📷", accept = "image/*" }:
+  { label: string; file: File | null; onChange: (f: File | null) => void; hint?: string; icon?: string; accept?: string }) {
+  const isImg = !!file && file.type.startsWith("image/");
+  const preview = useMemo(() => (file && file.type.startsWith("image/") ? URL.createObjectURL(file) : null), [file]);
   return (
     <label className="relative flex aspect-square cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-line bg-card text-center text-sm text-muted">
-      {preview ? (
+      {preview && isImg ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={preview} alt={label} className="absolute inset-0 h-full w-full object-cover" />
+      ) : file ? (
+        <>
+          <span className="text-3xl">📄</span>
+          <span className="line-clamp-2 break-all px-3 font-medium text-ink">{file.name}</span>
+        </>
       ) : (
         <>
-          <span className="text-2xl">📷</span>
-          <span>{label}</span>
+          <span className="text-2xl">{icon}</span>
+          <span className="font-medium">{label}</span>
+          {hint && <span className="mt-1 px-3 text-xs">{hint}</span>}
         </>
       )}
-      <input type="file" accept="image/*" className="sr-only"
+      <input type="file" accept={accept} className="sr-only"
         onChange={(e) => onChange(e.target.files?.[0] ?? null)} />
       {file && (
         <button type="button" onClick={(e) => { e.preventDefault(); onChange(null); }}

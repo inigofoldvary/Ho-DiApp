@@ -1,7 +1,19 @@
 import { supabase } from "./supabase";
 
-/** Reduce la foto (para que suba rápido) y la guarda en Supabase. Devuelve la ruta. */
+export const isPdf = (path?: string | null) => !!path && path.toLowerCase().endsWith(".pdf");
+/** Lo que se puede usar como miniatura: la foto del objeto, o el adjunto si es una imagen. */
+export const thumbPath = (a: { photo_path?: string | null; receipt_path?: string | null }) =>
+  a.photo_path ?? (isPdf(a.receipt_path) ? "" : a.receipt_path ?? "");
+
+/** Reduce la foto (para que suba rápido) y la guarda en Supabase. Un PDF se sube tal cual. Devuelve la ruta. */
 export async function uploadPhoto(householdId: string, file: File): Promise<string> {
+  if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    if (file.size > 15 * 1024 * 1024) throw new Error("El PDF pesa demasiado (máximo 15 MB)");
+    const path = `${householdId}/${crypto.randomUUID()}.pdf`;
+    const { error } = await supabase().storage.from("fotos").upload(path, file, { contentType: "application/pdf", upsert: false });
+    if (error) throw error;
+    return path;
+  }
   const blob = await shrink(file, 1600, 0.8);
   const path = `${householdId}/${crypto.randomUUID()}.jpg`;
   const { error } = await supabase().storage.from("fotos").upload(path, blob, {

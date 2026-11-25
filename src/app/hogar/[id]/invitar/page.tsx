@@ -102,7 +102,7 @@ function Invitar() {
         </form>
       )}
       <ErrorBox>{error}</ErrorBox>
-      <p className="mt-2 text-xs text-muted">Solo se puede quitar a alguien si no tiene dinero puesto en nada. Si sí tiene, usad «Alguien se va» para repartir.</p>
+      <p className="mt-2 text-xs text-muted">Solo se puede quitar a alguien si no tiene dinero puesto en nada. Si sí tiene, usad «Repartir y disolver».</p>
 
       <Link href={`/hogar/${id}`} className="mt-6 block"><Button variant="ghost">Ir al hogar →</Button></Link>
     </main>
