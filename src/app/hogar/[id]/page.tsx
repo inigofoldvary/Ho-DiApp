@@ -13,7 +13,7 @@ import { AppBar, Button, Card, ErrorBox, Loading } from "@/components/ui";
 
 type Asset = {
   id: string; name: string; total_cents: number; status: string; receipt_path: string | null; photo_path: string | null;
-  purchase_date: string; visibility: string; created_at: string;
+  purchase_date: string; visibility: string; created_at: string; gone_reason?: string | null; gone_to?: string | null;
   asset_participants: { user_id: string; amount_cents: number; profiles: { display_name: string } | null }[];
 };
 type Plan = {
@@ -74,7 +74,7 @@ export default function Hogar() {
     loadMembers(id, user.id).then(setMembers).catch(() => {});
     loadPays();
     db.from("assets")
-      .select("id, name, total_cents, status, receipt_path, photo_path, purchase_date, visibility, created_at, asset_participants(user_id, amount_cents, profiles(display_name))")
+      .select("*, asset_participants(user_id, amount_cents, profiles(display_name))")
       .eq("household_id", id).order("purchase_date", { ascending: false })
       .then(({ data }) => {
         const list = (data as unknown as Asset[]) ?? [];
@@ -85,7 +85,7 @@ export default function Hogar() {
 
   if (loadError) return <main className="pt-10"><ErrorBox>No se pudo cargar el hogar: {loadError}</ErrorBox></main>;
   if (!home) return <Loading />;
-  const total = assets.reduce((s, a) => s + a.total_cents, 0);
+  const total = assets.filter((a) => !a.gone_reason).reduce((s, a) => s + a.total_cents, 0);
   const iLeft = !!me?.left_at;
   const canEdit = home.status === "activo" && !iLeft;
   // Cuotas pendientes agrupadas por mes (las semanales de un mismo mes van juntas).
@@ -98,7 +98,7 @@ export default function Hogar() {
     ...assets.map((a) => ({ kind: "asset" as const, a, date: a.purchase_date })),
     ...loosePlans.map((p) => ({ kind: "plan" as const, p, date: p.start_date })),
   ].sort((x, y) => y.date.localeCompare(x.date));
-  const leaverName = exit ? (exit.leaving_user_id === user?.id ? "Tú" : members.find((m) => m.user_id === exit.leaving_user_id)?.name ?? "Alguien") : "";
+  const nameOf = (u?: string | null) => (u === user?.id ? "ti" : members.find((m) => m.user_id === u)?.name ?? "alguien");
 
   return (
     <main>
@@ -109,20 +109,20 @@ export default function Hogar() {
         <h1 className="min-w-0 truncate text-2xl font-bold tracking-tight">{home.name}</h1>
         <Link href={`/hogar/${id}/reporte`} className="shrink-0 rounded-full border border-line bg-card px-3 py-1 text-sm font-medium">Ver reporte</Link>
       </div>
-      {home.status !== "activo" && (
+      {home.status !== "activo" && !exit && (
         <Link href={`/hogar/${id}/disolver`} className="mb-4 block rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
           {home.status === "disuelto" ? "📦 Este hogar está disuelto. Toca para descargar el PDF final." : "🧊 Disolución en marcha: el inventario está congelado. Toca para confirmar."}
         </Link>
       )}
 
       {iLeft && me?.left_at && (
-        <Link href={`/hogar/${id}/salida`} className="mb-4 block rounded-xl bg-line px-4 py-3 text-sm font-medium text-muted">
-          🚪 Saliste de este hogar el {formatDateTime(me.left_at)}. Puedes consultarlo y bajarte tu reporte de salida, pero ya no añadir ni confirmar.
+        <Link href={`/hogar/${id}/disolver`} className="mb-4 block rounded-xl bg-line px-4 py-3 text-sm font-medium text-muted">
+          🚪 Saliste de este hogar el {formatDateTime(me.left_at)}. Puedes consultarlo y bajarte el PDF de la salida, pero ya no añadir ni confirmar.
         </Link>
       )}
       {exit && !iLeft && (
-        <Link href={`/hogar/${id}/salida`} className="mb-4 block rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
-          🚪 {leaverName === "Tú" ? "Te vas del piso" : `${leaverName} se va del piso`}. Toca para ver el reporte de salida y confirmar.
+        <Link href={`/hogar/${id}/disolver`} className="mb-4 block rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn">
+          🚪 Salida del piso en marcha: el inventario está congelado. Toca para seguir con el reparto.
         </Link>
       )}
 
@@ -189,6 +189,10 @@ export default function Hogar() {
                     <p className="truncate text-sm text-muted">{payers}</p>
                     <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-medium">
                       <span className={`rounded-full px-2 py-0.5 ${st.cls}`}>{st.text}</span>
+                      {a.gone_reason && (
+                        <span className="rounded-full bg-line px-2 py-0.5 text-muted">
+                          {a.gone_reason === "vendido" ? "Para vender" : a.gone_reason === "llevado" ? `Se lo llevó ${nameOf(a.gone_to)}` : `Ahora es de ${nameOf(a.gone_to)}`}
+                        </span>)}
                       {!a.receipt_path && <span className="rounded-full bg-line px-2 py-0.5 text-muted">Sin ticket</span>}
                       {pending.has(a.id) && <span className="rounded-full bg-warn px-2 py-0.5 text-white">Te toca confirmar</span>}
                       {plansOf(a.id).map((p) => (
@@ -208,9 +212,9 @@ export default function Hogar() {
       )}
       {canEdit && (
         <div className="mt-10 space-y-3">
-          {home.kind !== "pareja" && !exit && (
-            <Link href={`/hogar/${id}/salida`} className="block"><Button variant="secondary">Alguien se va del piso</Button></Link>)}
-          <Link href={`/hogar/${id}/disolver`} className="block"><Button variant="secondary" className="!text-bad">Disolver este hogar</Button></Link>
+          <Link href={`/hogar/${id}/disolver`} className="block">
+            <Button variant="secondary" className="!text-bad">{home.kind === "pareja" ? "Disolver este hogar" : "Alguien se va / disolver el piso"}</Button>
+          </Link>
         </div>
       )}
     </main>

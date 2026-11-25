@@ -14,7 +14,7 @@ import {
 } from "@/lib/split";
 import { Button, Card, ErrorBox, Header, Loading } from "@/components/ui";
 
-type Household = { name: string; status: string; dissolved_at: string | null };
+type Household = { name: string; kind: string; status: string; dissolved_at: string | null };
 type Conf = { user_id: string; decision: string; comment: string | null; created_at: string; subject_version: number };
 
 const PHASES = [
@@ -30,11 +30,14 @@ export default function Disolver() {
   const user = useRequireUser();
   const [home, setHome] = useState<Household | null>(null);
   const [diss, setDiss] = useState<Dissolution | null>(null);
+  const [rejected, setRejected] = useState(false);
+  const [pastExits, setPastExits] = useState<Dissolution[]>([]);
   const [confs, setConfs] = useState<Conf[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [split, setSplit] = useState<SplitState | null>(null);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [pendingCount, setPendingCount] = useState(0);
+  const [leaving, setLeaving] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [sure, setSure] = useState(false);
@@ -42,25 +45,35 @@ export default function Disolver() {
   const load = useCallback(async () => {
     if (!user) return;
     const db = supabase();
+    const ver = new URLSearchParams(window.location.search).get("ver");
     const [h, d, a, i] = await Promise.all([
-      db.from("households").select("name, status, dissolved_at").eq("id", id).single(),
-      db.from("dissolutions").select("id, status, phase, values_version, version, created_by, created_at, completed_at")
-        .eq("household_id", id).eq("kind", "total")
-        .in("status", ["pendiente", "confirmado", "rechazado"]).order("created_at", { ascending: false }).limit(1),
+      db.from("households").select("name, kind, status, dissolved_at").eq("id", id).single(),
+      db.from("dissolutions").select("id, kind, status, phase, values_version, version, created_by, created_at, completed_at")
+        .eq("household_id", id).order("created_at", { ascending: false }),
       db.from("assets").select("id", { count: "exact", head: true }).eq("household_id", id).eq("status", "pendiente"),
       db.from("installments").select("id", { count: "exact", head: true }).eq("household_id", id).eq("status", "pendiente"),
     ]);
     if (h.error) return setError(errorText(h.error));
     setHome(h.data);
-    const last = (d.data?.[0] as Dissolution) ?? null;
-    setDiss(last);
+    const all = (d.data ?? []) as Dissolution[];
+    const ms = await loadMembers(id, user.id);
+    setMembers(ms);
+    const iLeft = !ms.find((m) => m.user_id === user.id)?.active;
+    const exits = all.filter((x) => x.kind === "parcial" && x.status === "confirmado" && x.phase === "cerrado");
+    setPastExits(exits);
+    const shown =
+      h.data.status === "disuelto" ? all.find((x) => x.kind === "total" && x.status === "confirmado") ?? null
+      : all.find((x) => x.status === "pendiente")
+        ?? (ver ? all.find((x) => x.id === ver) : null)
+        ?? (iLeft ? exits[0] : null) ?? null;
+    setDiss(shown);
+    setRejected(!shown && all[0]?.status === "rechazado");
     setPendingCount((a.count ?? 0) + (i.count ?? 0));
-    setMembers(await loadMembers(id, user.id));
-    if (last && last.status !== "rechazado") {
+    if (shown) {
       const [c, s] = await Promise.all([
         db.from("confirmations").select("user_id, decision, comment, created_at, subject_version")
-          .eq("subject_type", "dissolution").eq("subject_id", last.id).order("created_at"),
-        loadSplit(id, last).catch((e) => { setError(errorText(e)); return null; }),
+          .eq("subject_type", "dissolution").eq("subject_id", shown.id).order("created_at"),
+        loadSplit(id, shown).catch((e) => { setError(errorText(e)); return null; }),
       ]);
       setConfs((c.data as Conf[]) ?? []);
       setSplit(s);
@@ -83,67 +96,120 @@ export default function Disolver() {
 
   if (!home || !user) return error ? <main className="pt-10"><ErrorBox>{error}</ErrorBox></main> : <Loading />;
   const active = members.filter((m) => m.active);
-  const people = active.map((m) => m.user_id);
   const nameOf = (u: string) => (u === user.id ? "Tú" : members.find((m) => m.user_id === u)?.name ?? "Antiguo miembro");
   const realName = (u: string) => members.find((m) => m.user_id === u)?.name ?? "Antiguo miembro";
+  const closed = diss?.phase === "cerrado" || home.status === "disuelto";
+  // Quiénes estaban: al cerrar, los que dieron el OK a los valores (todos los que había entonces).
+  const people = closed && split ? split.valueOks : active.map((m) => m.user_id);
+  const isExit = diss?.kind === "parcial";
+  const stayers = isExit && split ? people.filter((u) => !split.leavers.includes(u)) : [];
   const inProgress = home.status === "disolviendo" && diss?.status === "pendiente";
-  const phase = home.status === "disuelto" ? "cerrado" : diss?.phase ?? "valores";
+  const phase = closed ? "cerrado" : diss?.phase ?? "valores";
   const current = diss ? confs.filter((c) => c.subject_version === diss.version) : [];
   const rejection = current.find((c) => c.decision === "rechazar");
+  const isPareja = home.kind === "pareja";
+  const allLeave = isPareja || (leaving.size > 0 && active.every((m) => leaving.has(m.user_id)));
+  const leaverNames = (us: string[]) => us.map(realName).join(" y ");
+  const title = isExit ? "Salida del piso" : "Disolver hogar";
 
   return (
     <main className="pb-10">
-      <Header title="Disolver hogar" back={`/hogar/${id}`} />
+      <Header title={title} back={`/hogar/${id}`} />
       <ErrorBox>{error}</ErrorBox>
 
-      {(inProgress || home.status === "disuelto") && (
-        <ol className="mb-4 grid grid-cols-4 gap-1.5 text-center text-xs font-semibold">
-          {PHASES.map((p, i) => {
-            const idx = PHASES.findIndex((x) => x.id === phase);
-            const state = i < idx ? "done" : i === idx ? "now" : "next";
-            return (
-              <li key={p.id} className={`rounded-full px-1 py-1.5 ${state === "now" ? "bg-brand text-brand-ink" : state === "done" ? "bg-ok-bg text-ok" : "border border-line text-muted"}`}>
-                {state === "done" ? "✓ " : `${i + 1} · `}{p.label}
-              </li>
-            );
-          })}
-        </ol>
+      {(inProgress || closed) && diss && (
+        <>
+          {isExit && split && <p className="mb-3 text-sm text-muted">Se {split.leavers.length > 1 ? "van" : "va"} <b className="text-ink">{leaverNames(split.leavers)}</b>. El resto sigue en el piso.</p>}
+          <ol className="mb-4 grid grid-cols-4 gap-1.5 text-center text-xs font-semibold">
+            {PHASES.map((p, i) => {
+              const idx = PHASES.findIndex((x) => x.id === phase);
+              const state = i < idx ? "done" : i === idx ? "now" : "next";
+              return (
+                <li key={p.id} className={`rounded-full px-1 py-1.5 ${state === "now" ? "bg-brand text-brand-ink" : state === "done" ? "bg-ok-bg text-ok" : "border border-line text-muted"}`}>
+                  {state === "done" ? "✓ " : `${i + 1} · `}{p.label}
+                </li>
+              );
+            })}
+          </ol>
+        </>
       )}
 
-      {home.status === "disuelto" && (
-        <Closed home={home} split={split} people={people} nameOf={nameOf} realName={realName} id={id} setError={setError} />
+      {closed && diss && (
+        <Closed home={home} diss={diss} split={split} people={people} stayers={stayers} nameOf={nameOf} realName={realName} id={id} setError={setError} />
       )}
 
-      {home.status === "activo" && (
+      {home.status === "activo" && !closed && (
         <div className="space-y-4">
-          {diss?.status === "rechazado" && (
+          {rejected && (
             <p className="rounded-xl bg-bad-bg px-4 py-3 text-sm text-bad">
-              El último intento de disolver se paró porque alguien dijo que faltaba algo. Revisad el inventario antes de volver a intentarlo.
+              El último intento se paró porque alguien dijo que faltaba algo. Revisad el inventario antes de volver a intentarlo.
             </p>
           )}
-          <Card className="space-y-3">
-            <p className="font-semibold">¿Cómo funciona?</p>
-            <ol className="list-decimal space-y-1 pl-5 text-sm text-muted">
-              <li>El inventario se <b>congela</b>: nadie puede añadir ni cambiar nada.</li>
-              <li><b>Valores:</b> os ponéis de acuerdo en cuánto vale hoy cada cosa.</li>
-              <li><b>Elegir:</b> cada uno marca, por separado, lo que se quiere quedar.</li>
-              <li><b>Acuerdo:</b> la app propone dos repartos. Uno lo envía y los demás lo aprueban o lo devuelven con cambios.</li>
-              <li>Cuando todos aprobáis, sale el <b>PDF final</b>: quién se queda qué y quién paga a quién.</li>
-            </ol>
-            <p className="text-sm text-muted">Mientras no aprobéis el reparto, se puede cancelar y el hogar vuelve a la normalidad.</p>
-          </Card>
+
+          {!isPareja && (
+            <section>
+              <h2 className="text-lg font-semibold">¿Quién se va?</h2>
+              <p className="mb-2 text-sm text-muted">Marca a una persona, a varias o a todas. Si os vais todos, se disuelve el hogar.</p>
+              <Card className="divide-y divide-line !p-0">
+                {active.map((m) => (
+                  <label key={m.user_id} className="flex items-center gap-3 px-4 py-3">
+                    <input type="checkbox" checked={leaving.has(m.user_id)} className="h-5 w-5 accent-[var(--brand)]"
+                      onChange={(e) => setLeaving((s) => { const n = new Set(s); if (e.target.checked) n.add(m.user_id); else n.delete(m.user_id); return n; })} />
+                    <span className="font-medium">{nameOf(m.user_id)}</span>
+                  </label>
+                ))}
+              </Card>
+              <button type="button" onClick={() => setLeaving(new Set(active.map((m) => m.user_id)))}
+                className="mt-2 text-sm font-medium text-brand">Nos vamos todos</button>
+            </section>
+          )}
+
+          {(isPareja || leaving.size > 0) && (
+            <Card className="space-y-3">
+              <p className="font-semibold">{allLeave ? "Se disuelve el hogar entero" : `Se ${leaving.size > 1 ? "van" : "va"} ${leaverNames([...leaving])}`}</p>
+              <ol className="list-decimal space-y-1 pl-5 text-sm text-muted">
+                <li>El inventario se <b>congela</b> mientras dura el reparto.</li>
+                <li><b>Valores:</b> os ponéis todos de acuerdo en cuánto vale hoy cada cosa.</li>
+                <li><b>Elegir:</b> cada uno marca, por separado, lo que quiere.</li>
+                <li><b>Acuerdo:</b> la app propone dos repartos. Cada cosa va a alguien, se vende{allLeave ? "" : " o se queda en el piso"}. Uno lo envía y los demás lo aprueban o lo devuelven con cambios.</li>
+                {!allLeave && <li>Lo que <b>se queda en el piso</b>, los que siguen se lo pagan a quien se va, según lo que puso.</li>}
+                <li>Cuando todos aprobáis, sale el <b>PDF</b>: quién se queda qué y quién paga a quién.</li>
+              </ol>
+              <p className="text-sm text-muted">Hasta que aprobéis el reparto, se puede cancelar y todo vuelve a la normalidad.</p>
+            </Card>
+          )}
           {pendingCount > 0 && (
             <p className="rounded-xl bg-warn-bg px-4 py-3 text-sm text-warn">
               Ojo: hay {pendingCount} {pendingCount === 1 ? "cosa pendiente" : "cosas pendientes"} de confirmar. Solo entra en el reparto lo confirmado.
             </p>
           )}
-          <label className="flex items-start gap-3 rounded-2xl border border-line bg-card p-4">
-            <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} className="mt-0.5 h-5 w-5 accent-[var(--brand)]" />
-            <span className="text-sm">Entiendo que el inventario de <b>{home.name}</b> se congelará.</span>
-          </label>
-          <Button className="!bg-bad" disabled={!sure || busy} onClick={() => call("start_dissolution", { p_household: id })}>
-            Empezar a disolver
-          </Button>
+          {(isPareja || leaving.size > 0) && (
+            <>
+              <label className="flex items-start gap-3 rounded-2xl border border-line bg-card p-4">
+                <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} className="mt-0.5 h-5 w-5 accent-[var(--brand)]" />
+                <span className="text-sm">Entiendo que el inventario de <b>{home.name}</b> se congelará mientras dure el reparto.</span>
+              </label>
+              <Button className="!bg-bad" disabled={!sure || busy}
+                onClick={() => call("start_split", { p_household: id, p_leavers: isPareja ? active.map((m) => m.user_id) : [...leaving] })}>
+                {allLeave ? "Empezar a disolver" : "Empezar el reparto de la salida"}
+              </Button>
+            </>
+          )}
+
+          {pastExits.length > 0 && (
+            <section className="pt-4">
+              <h2 className="mb-2 text-sm font-semibold text-muted">Salidas anteriores</h2>
+              <div className="space-y-2">
+                {pastExits.map((x) => (
+                  <a key={x.id} href={`/hogar/${id}/disolver?ver=${x.id}`} className="block">
+                    <Card className="flex items-center justify-between text-sm">
+                      <span>{formatDateTime(x.completed_at ?? x.created_at)}</span><span className="text-muted">Ver reparto y PDF ›</span>
+                    </Card>
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       )}
 
@@ -156,13 +222,13 @@ export default function Disolver() {
           )}
           {phase === "valores" && <PhaseValues split={split} people={people} me={user.id} nameOf={nameOf} urls={urls} busy={busy} call={call} />}
           {phase === "elegir" && <PhasePick split={split} people={people} me={user.id} nameOf={nameOf} urls={urls} busy={busy} call={call} />}
-          {phase === "acuerdo" && <PhaseDeal key={split.offers.at(-1)?.id ?? "ninguna"} split={split} people={people} me={user.id} nameOf={nameOf} busy={busy} call={call} />}
+          {phase === "acuerdo" && <PhaseDeal key={split.offers.at(-1)?.id ?? "ninguna"} split={split} people={people} stayers={stayers} me={user.id} nameOf={nameOf} busy={busy} call={call} />}
 
           <MissingSomething dissId={diss.id} busy={busy} call={call} />
           <Button variant="ghost" disabled={busy} onClick={async () => {
-            if (!window.confirm("¿Cancelar la disolución? El hogar volverá a funcionar con normalidad.")) return;
+            if (!window.confirm(isExit ? "¿Cancelar la salida? El piso volverá a funcionar con normalidad." : "¿Cancelar la disolución? El hogar volverá a funcionar con normalidad.")) return;
             if (await call("cancel_dissolution", { p_dissolution: diss.id })) router.replace(`/hogar/${id}`);
-          }}>Cancelar la disolución</Button>
+          }}>{isExit ? "Cancelar la salida" : "Cancelar la disolución"}</Button>
         </div>
       )}
     </main>
@@ -303,13 +369,14 @@ function PhasePick({ split, people, me, nameOf, urls, busy, call }:
 }
 
 /* ---------- Fase 3: acuerdo ---------- */
-function PhaseDeal({ split, people, me, nameOf, busy, call }:
-  { split: SplitState; people: string[]; me: string; nameOf: (u: string) => string; busy: boolean; call: CallFn }) {
+function PhaseDeal({ split, people, stayers, me, nameOf, busy, call }:
+  { split: SplitState; people: string[]; stayers: string[]; me: string; nameOf: (u: string) => string; busy: boolean; call: CallFn }) {
   const open = [...split.offers].reverse().find((o) => o.status === "pendiente") ?? null;
   const oks = open ? split.offerOks[open.id] ?? [] : [];
   const iApproved = !!open && oks.includes(me);
-  const p1 = useMemo(() => proposalByPaid(split.items, split.wants, people), [split, people]);
-  const p2 = useMemo(() => proposalBalanced(split.items, split.wants, people), [split, people]);
+  const nobody = stayers.length ? "piso" : "vender";
+  const p1 = useMemo(() => proposalByPaid(split.items, split.wants, people, nobody), [split, people, nobody]);
+  const p2 = useMemo(() => proposalBalanced(split.items, split.wants, people, nobody, stayers), [split, people, nobody, stayers]);
   const [opt, setOpt] = useState<1 | 2>(1);
   const [edited, setEdited] = useState<Assignment | null>(null);
   const [note, setNote] = useState("");
@@ -319,8 +386,8 @@ function PhaseDeal({ split, people, me, nameOf, busy, call }:
   const changed = !!edited && !sameAssignment(edited, baseAssign);
 
   function cycle(itemId: string) {
-    const order = [...people, "vender"];
-    const cur = assign[itemId] ?? "vender";
+    const order = [...people, ...(stayers.length ? ["piso"] : []), "vender"];
+    const cur = assign[itemId] ?? nobody;
     setEdited({ ...assign, [itemId]: order[(order.indexOf(cur) + 1) % order.length] });
   }
 
@@ -338,7 +405,7 @@ function PhaseDeal({ split, people, me, nameOf, busy, call }:
           ))}
         </tbody>
       </table>
-      <p className="mt-2 text-xs text-muted">✋ = lo quiere. Si no lo quiere nadie, se propone venderlo.</p>
+      <p className="mt-2 text-xs text-muted">✋ = lo quiere. Si no lo quiere nadie, se propone {stayers.length ? "que se quede en el piso" : "venderlo"}.</p>
     </Card>
   );
 
@@ -388,13 +455,13 @@ function PhaseDeal({ split, people, me, nameOf, busy, call }:
         </div>
       )}
 
-      <SplitSummary items={split.items} assign={assign} people={people} nameOf={nameOf} />
+      <SplitSummary items={split.items} assign={assign} people={people} stayers={stayers} nameOf={nameOf} />
 
       <Card className="!p-3">
         <p className="mb-2 font-semibold">Quién se queda qué</p>
         <ul className="space-y-1.5">
           {split.items.map((it) => {
-            const who = assign[it.id] ?? "vender";
+            const who = assign[it.id] ?? nobody;
             const wanters = people.filter((u) => split.wants[u]?.includes(it.id));
             const canEdit = !iApproved;
             return (
@@ -404,12 +471,12 @@ function PhaseDeal({ split, people, me, nameOf, busy, call }:
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{it.name} · <span className="tabular-nums">{formatEuros(it.value_cents)}</span></span>
                     <span className="block truncate text-xs text-muted">
-                      {people.filter((u) => shareOf(it, u) > 0).map((u) => `${nameOf(u)} ${Math.round(shareOf(it, u) * 100)} %`).join(" · ") || "—"}
+                      {people.filter((u) => shareOf(it, u, people) > 0).map((u) => `${nameOf(u)} ${Math.round(shareOf(it, u, people) * 100)} %`).join(" · ") || "—"}
                       {" · lo quiere: "}{wanters.map(nameOf).join(" y ") || "nadie"}
                     </span>
                   </span>
-                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${who === "vender" ? "bg-line text-muted" : who === me ? "bg-brand text-brand-ink" : "bg-accent text-white"}`}>
-                    {who === "vender" ? "Vender" : nameOf(who)}
+                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${who === "vender" ? "bg-line text-muted" : who === "piso" ? "bg-ok-bg text-ok" : who === me ? "bg-brand text-brand-ink" : "bg-accent text-white"}`}>
+                    {who === "vender" ? "Vender" : who === "piso" ? "Se queda en el piso" : nameOf(who)}
                   </span>
                 </button>
               </li>
@@ -447,8 +514,9 @@ function PhaseDeal({ split, people, me, nameOf, busy, call }:
   );
 }
 
-function SplitSummary({ items, assign, people, nameOf }: { items: SplitItem[]; assign: Assignment; people: string[]; nameOf: (u: string) => string }) {
-  const t = transfers(balances(items, assign, people));
+function SplitSummary({ items, assign, people, stayers, nameOf }: { items: SplitItem[]; assign: Assignment; people: string[]; stayers: string[]; nameOf: (u: string) => string }) {
+  const t = transfers(balances(items, assign, people, stayers));
+  const home = items.filter((it) => assign[it.id] === "piso");
   const sale = saleSplit(items, assign, people);
   return (
     <>
@@ -467,7 +535,16 @@ function SplitSummary({ items, assign, people, nameOf }: { items: SplitItem[]; a
             </div>
           );
         })}
+        {home.length > 0 && (
+          <div className="flex items-baseline justify-between gap-3 px-4 py-2.5">
+            <span className="min-w-0"><b>Se queda en el piso</b> <span className="text-sm text-muted">{home.map((g) => g.name).join(", ")}</span></span>
+            <span className="shrink-0 font-semibold tabular-nums">{formatEuros(home.reduce((s, it) => s + it.value_cents, 0))}</span>
+          </div>
+        )}
       </Card>
+      {home.length > 0 && (
+        <p className="-mt-2 text-xs text-muted">Lo que se queda en el piso lo pagan los que siguen ({stayers.map(nameOf).join(", ")}), cada uno según lo que puso. Ya está incluido en los pagos de arriba.</p>
+      )}
       {sale.sold.length > 0 && (
         <Card className="overflow-x-auto !p-3">
           <div className="mb-2 flex items-baseline justify-between">
@@ -480,7 +557,7 @@ function SplitSummary({ items, assign, people, nameOf }: { items: SplitItem[]; a
               {sale.sold.map((it) => (
                 <tr key={it.id} className="border-t border-line">
                   <td className="py-1.5">{it.name} <span className="text-muted">{formatEuros(it.value_cents)}</span></td>
-                  {people.map((u) => <td key={u} className="text-right tabular-nums">{shareOf(it, u) ? formatEuros(Math.round(it.value_cents * shareOf(it, u))) : "–"}</td>)}
+                  {people.map((u) => <td key={u} className="text-right tabular-nums">{shareOf(it, u, people) ? formatEuros(Math.round(it.value_cents * shareOf(it, u, people))) : "–"}</td>)}
                 </tr>
               ))}
               <tr className="border-t border-line font-semibold"><td className="py-1.5">Total</td>{people.map((u) => <td key={u} className="text-right tabular-nums">{formatEuros(Math.round(sale.per[u] ?? 0))}</td>)}</tr>
@@ -494,14 +571,13 @@ function SplitSummary({ items, assign, people, nameOf }: { items: SplitItem[]; a
 }
 
 /* ---------- Cerrado ---------- */
-function Closed({ home, split, people, nameOf, realName, id, setError }:
-  { home: Household; split: SplitState | null; people: string[]; nameOf: (u: string) => string; realName: (u: string) => string; id: string; setError: (e: string) => void }) {
+function Closed({ home, diss, split, people, stayers, nameOf, realName, id, setError }:
+  { home: Household; diss: Dissolution; split: SplitState | null; people: string[]; stayers: string[]; nameOf: (u: string) => string; realName: (u: string) => string; id: string; setError: (e: string) => void }) {
   const [busy, setBusy] = useState(false);
   const accepted = split?.offers.find((o) => o.status === "aceptada") ?? null;
-  // En un hogar disuelto ya no hay "activos": usamos quienes aparecen en el reparto.
-  const everyone = accepted
-    ? [...new Set([...people, ...Object.values(accepted.assignment).filter((v) => v !== "vender"), ...split!.items.flatMap((it) => Object.keys(it.paid))])]
-    : people;
+  const isExit = diss.kind === "parcial";
+  const leavers = split?.leavers ?? [];
+  const keeperName = (v: string) => (v === "vender" ? "Para vender" : v === "piso" ? "Se queda en el piso" : realName(v));
 
   async function finalPdf() {
     setBusy(true);
@@ -511,14 +587,16 @@ function Closed({ home, split, people, nameOf, realName, id, setError }:
       let splitPdf;
       if (split && accepted) {
         const a = accepted.assignment;
-        const sale = saleSplit(split.items, a, everyone);
+        const sale = saleSplit(split.items, a, people);
         splitPdf = {
-          rows: split.items.map((it) => ({ name: it.name, price: it.price_cents, value: it.value_cents, keeper: a[it.id] === "vender" ? "Para vender" : realName(a[it.id]) })),
-          transfers: transfers(balances(split.items, a, everyone)).map((t) => ({ from: realName(t.from), to: realName(t.to), cents: t.cents })),
+          rows: split.items.map((it) => ({ name: it.name, price: it.price_cents, value: it.value_cents, keeper: keeperName(a[it.id]) })),
+          transfers: transfers(balances(split.items, a, people, stayers)).map((t) => ({ from: realName(t.from), to: realName(t.to), cents: t.cents })),
           sale: sale.sold.length ? { total: sale.total, per: Object.entries(sale.per).filter(([, v]) => v > 0).map(([u, v]) => ({ name: realName(u), cents: Math.round(v) })) } : null,
         };
       }
-      buildPdf(r, { final: true, split: splitPdf }).save(pdfFileName(r, true));
+      const names = leavers.map(realName).join(" y ");
+      buildPdf(r, { final: !isExit, split: splitPdf, title: isExit ? `Salida de ${names}` : undefined })
+        .save(isExit ? pdfFileName(r, false, names) : pdfFileName(r, true));
     } catch (e) { setError(errorText(e)); }
     setBusy(false);
   }
@@ -527,11 +605,20 @@ function Closed({ home, split, people, nameOf, realName, id, setError }:
     <div className="space-y-4">
       <Card className="space-y-2 text-center">
         <p className="text-4xl">🤝</p>
-        <p className="text-lg font-semibold">{home.name} está disuelto</p>
-        {home.dissolved_at && <p className="text-sm text-muted">Desde el {formatDateTime(home.dissolved_at)}. El inventario ya no se puede cambiar.</p>}
+        {isExit ? (
+          <>
+            <p className="text-lg font-semibold">{leavers.map(nameOf).join(" y ")} {leavers.length > 1 ? "salieron" : "salió"} del piso</p>
+            {diss.completed_at && <p className="text-sm text-muted">El {formatDateTime(diss.completed_at)}.</p>}
+          </>
+        ) : (
+          <>
+            <p className="text-lg font-semibold">{home.name} está disuelto</p>
+            {home.dissolved_at && <p className="text-sm text-muted">Desde el {formatDateTime(home.dissolved_at)}. El inventario ya no se puede cambiar.</p>}
+          </>
+        )}
       </Card>
-      {split && accepted && <SplitSummary items={split.items} assign={accepted.assignment} people={everyone} nameOf={nameOf} />}
-      <Button onClick={finalPdf} disabled={busy}>{busy ? "Preparando…" : "📄 Descargar PDF final"}</Button>
+      {split && accepted && <SplitSummary items={split.items} assign={accepted.assignment} people={people} stayers={stayers} nameOf={nameOf} />}
+      <Button onClick={finalPdf} disabled={busy}>{busy ? "Preparando…" : isExit ? "📄 Descargar PDF de la salida" : "📄 Descargar PDF final"}</Button>
     </div>
   );
 }

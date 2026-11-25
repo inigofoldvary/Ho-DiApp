@@ -14,12 +14,12 @@ export type SplitPdf = {
   sale: { total: number; per: { name: string; cents: number }[] } | null;
 };
 
-export function buildPdf(r: Report, opts: { final?: boolean; leaving?: { user_id: string; name: string }; split?: SplitPdf } = {}): jsPDF {
+export function buildPdf(r: Report, opts: { final?: boolean; leaving?: { user_id: string; name: string }; split?: SplitPdf; title?: string } = {}): jsPDF {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const green: [number, number, number] = [47, 111, 94];
   let y = 18;
 
-  doc.setFont("helvetica", "bold").setFontSize(18).text(opts.leaving ? `Salida de ${opts.leaving.name}` : opts.final ? "Inventario final del hogar" : "Resumen del hogar", 14, y);
+  doc.setFont("helvetica", "bold").setFontSize(18).text(opts.title ? opts.title : opts.leaving ? `Salida de ${opts.leaving.name}` : opts.final ? "Inventario final del hogar" : "Resumen del hogar", 14, y);
   y += 7;
   doc.setFont("helvetica", "normal").setFontSize(11).setTextColor(90)
     .text(`${r.household.name} · ${r.household.kind === "pareja" ? "Pareja" : "Compañeros de piso"}`, 14, y);

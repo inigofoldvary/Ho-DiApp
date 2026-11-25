@@ -6,11 +6,11 @@ export type SplitItem = {
   value_cents: number;
   paid: Record<string, number>; // céntimos puestos por cada persona
 };
-export type Assignment = Record<string, string>; // asset_id -> user_id | "vender"
+export type Assignment = Record<string, string>; // asset_id -> user_id | "vender" | "piso" (se queda para los que siguen)
 export type Transfer = { from: string; to: string; cents: number };
 
 export type Dissolution = {
-  id: string; status: string; phase: string; values_version: number; version: number;
+  id: string; kind: string; status: string; phase: string; values_version: number; version: number;
   created_by: string; created_at: string; completed_at: string | null;
 };
 export type Offer = { id: string; from_user: string; assignment: Assignment; note: string | null; status: string; created_at: string };
@@ -23,24 +23,31 @@ export type SplitState = {
   wants: Record<string, string[]>; // user -> assets
   offers: Offer[];             // de la más antigua a la más nueva
   offerOks: Record<string, string[]>; // offer -> users
+  leavers: string[];           // quién se va (en una disolución total, todos)
 };
 
-/** % de cada persona en un bien (0..1). Si nadie consta como pagador, a partes iguales entre quienes aparezcan. */
-export function shareOf(it: SplitItem, user: string): number {
-  const total = Object.values(it.paid).reduce((s, v) => s + v, 0);
-  if (total <= 0) return 0;
-  return (it.paid[user] ?? 0) / total;
+/**
+ * % de cada persona en un bien (0..1).
+ * Con `among`, solo cuentan esas personas: lo que puso alguien que ya se fue (y al que ya se compensó)
+ * se reparte entre los demás según lo que pusieron. Si ninguna de ellas puso nada, a partes iguales.
+ */
+export function shareOf(it: SplitItem, user: string, among?: string[]): number {
+  const who = among ?? Object.keys(it.paid);
+  const total = who.reduce((s, u) => s + (it.paid[u] ?? 0), 0);
+  if (total <= 0) return among && among.includes(user) ? 1 / among.length : 0;
+  return who.includes(user) ? (it.paid[user] ?? 0) / total : 0;
 }
 
 export async function loadSplit(householdId: string, diss: Dissolution): Promise<SplitState> {
   const db = supabase();
-  const [v, ok, pd, w, of] = await Promise.all([
+  const [v, ok, pd, w, of, lv] = await Promise.all([
     db.from("dissolution_values").select("asset_id, value_cents, assets(name, total_cents, purchase_date, photo_path, receipt_path, asset_participants(user_id, amount_cents))")
       .eq("dissolution_id", diss.id),
     db.from("dissolution_value_oks").select("user_id").eq("dissolution_id", diss.id).eq("values_version", diss.values_version),
     db.from("dissolution_picks_done").select("user_id").eq("dissolution_id", diss.id),
     db.from("dissolution_wants").select("user_id, asset_id").eq("dissolution_id", diss.id),
     db.from("dissolution_offers").select("id, from_user, assignment, note, status, created_at").eq("dissolution_id", diss.id).order("created_at"),
+    db.from("dissolution_leavers").select("user_id").eq("dissolution_id", diss.id),
   ]);
   for (const r of [v, ok, pd, w, of]) if (r.error) throw r.error;
 
@@ -84,20 +91,27 @@ export async function loadSplit(householdId: string, diss: Dissolution): Promise
     valueOks: ((ok.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
     picksDone: ((pd.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
     wants, offers, offerOks,
+    leavers: ((lv.data ?? []) as { user_id: string }[]).map((r) => r.user_id),
   };
 }
 
-/** Lo que se lleva cada uno menos lo que le corresponde de lo que se reparte. >0 debe pagar, <0 debe cobrar. */
-export function balances(items: SplitItem[], a: Assignment, people: string[]): Record<string, number> {
+/**
+ * Lo que se lleva cada uno menos lo que le corresponde de lo que se reparte. >0 debe pagar, <0 debe cobrar.
+ * "piso" = se queda para los que siguen (`stayers`): lo pagan entre ellos según lo que pusieron
+ * (a partes iguales si ninguno puso nada), y así se compensa a los que se van.
+ */
+export function balances(items: SplitItem[], a: Assignment, people: string[], stayers: string[] = []): Record<string, number> {
   const b: Record<string, number> = Object.fromEntries(people.map((p) => [p, 0]));
   for (const it of items) {
     const who = a[it.id];
     if (!who || who === "vender") continue;
-    b[who] = (b[who] ?? 0) + it.value_cents;
-    for (const p of people) b[p] -= it.value_cents * shareOf(it, p);
-    // Si pagó alguien que ya no está en el hogar, su parte se reparte entre quien se lo queda (no hay a quién pagar).
-    const gone = Object.keys(it.paid).filter((u) => !people.includes(u));
-    for (const u of gone) b[who] -= it.value_cents * shareOf(it, u);
+    if (who === "piso") {
+      if (!stayers.length) continue;
+      for (const s of stayers) b[s] = (b[s] ?? 0) + it.value_cents * shareOf(it, s, stayers);
+    } else {
+      b[who] = (b[who] ?? 0) + it.value_cents;
+    }
+    for (const p of people) b[p] -= it.value_cents * shareOf(it, p, people);
   }
   return b;
 }
@@ -120,13 +134,13 @@ export function transfers(b: Record<string, number>): Transfer[] {
 const moved = (b: Record<string, number>) => Object.values(b).filter((v) => v > 0).reduce((s, v) => s + v, 0);
 
 /** Opción 1: si varios quieren algo, se lo queda quien más puso. Lo que nadie quiere, a vender. */
-export function proposalByPaid(items: SplitItem[], wants: Record<string, string[]>, people: string[]): Assignment {
+export function proposalByPaid(items: SplitItem[], wants: Record<string, string[]>, people: string[], nobody = "vender"): Assignment {
   const a: Assignment = {};
   const got: Record<string, number> = Object.fromEntries(people.map((p) => [p, 0]));
   for (const it of items) {
     const w = people.filter((p) => wants[p]?.includes(it.id));
-    if (!w.length) { a[it.id] = "vender"; continue; }
-    w.sort((x, y) => shareOf(it, y) - shareOf(it, x) || got[x] - got[y]);
+    if (!w.length) { a[it.id] = nobody; continue; }
+    w.sort((x, y) => shareOf(it, y, people) - shareOf(it, x, people) || got[x] - got[y]);
     a[it.id] = w[0];
     got[w[0]] += it.value_cents;
   }
@@ -134,12 +148,12 @@ export function proposalByPaid(items: SplitItem[], wants: Record<string, string[
 }
 
 /** Opción 2: entre lo que quieren varios, el reparto que mueve menos dinero. */
-export function proposalBalanced(items: SplitItem[], wants: Record<string, string[]>, people: string[]): Assignment {
+export function proposalBalanced(items: SplitItem[], wants: Record<string, string[]>, people: string[], nobody = "vender", stayers: string[] = []): Assignment {
   const a: Assignment = {};
   const contested: { id: string; w: string[] }[] = [];
   for (const it of items) {
     const w = people.filter((p) => wants[p]?.includes(it.id));
-    if (!w.length) a[it.id] = "vender";
+    if (!w.length) a[it.id] = nobody;
     else if (w.length === 1) a[it.id] = w[0];
     else contested.push({ id: it.id, w });
   }
@@ -151,7 +165,7 @@ export function proposalBalanced(items: SplitItem[], wants: Record<string, strin
       let r = k;
       const t: Assignment = { ...a };
       for (const c of contested) { t[c.id] = c.w[r % c.w.length]; r = Math.floor(r / c.w.length); }
-      const cost = moved(balances(items, t, people));
+      const cost = moved(balances(items, t, people, stayers));
       if (cost < bestCost - 0.5) { bestCost = cost; best = t; }
     }
     return best;
@@ -161,7 +175,7 @@ export function proposalBalanced(items: SplitItem[], wants: Record<string, strin
   for (const c of contested) {
     let bestU = c.w[0], bestCost = Infinity;
     for (const u of c.w) {
-      const cost = moved(balances(items, { ...t, [c.id]: u }, people));
+      const cost = moved(balances(items, { ...t, [c.id]: u }, people, stayers));
       if (cost < bestCost) { bestCost = cost; bestU = u; }
     }
     t[c.id] = bestU;
@@ -173,7 +187,7 @@ export function proposalBalanced(items: SplitItem[], wants: Record<string, strin
 export function saleSplit(items: SplitItem[], a: Assignment, people: string[]) {
   const sold = items.filter((it) => a[it.id] === "vender");
   const per: Record<string, number> = Object.fromEntries(people.map((p) => [p, 0]));
-  for (const it of sold) for (const u of Object.keys(it.paid)) per[u] = (per[u] ?? 0) + it.value_cents * shareOf(it, u);
+  for (const it of sold) for (const u of people) per[u] = (per[u] ?? 0) + it.value_cents * shareOf(it, u, people);
   return { sold, per, total: sold.reduce((s, it) => s + it.value_cents, 0) };
 }
 
